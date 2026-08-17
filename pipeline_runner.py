@@ -34,9 +34,24 @@ from pipeline.schema import Phase1Result
 DEMO_MODE = os.environ.get("DEMO_MODE", "true").lower() == "true"
 
 
-def _get_client() -> ClaudeClient | None:
+def _get_client():
+    """
+    Provider selection: if AI_PROVIDER is set explicitly, use that. Otherwise, prefer
+    ANTHROPIC_API_KEY if present, then GEMINI_API_KEY. Falls back to None (demo mode) if
+    neither is set. Both clients implement the same generate_text/generate_json interface,
+    so nothing downstream needs to know which one is actually running.
+    """
+    provider = os.environ.get("AI_PROVIDER", "").lower()
+
+    if provider == "gemini" or (not provider and os.environ.get("GEMINI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY")):
+        if os.environ.get("GEMINI_API_KEY"):
+            from pipeline.gemini_client import GeminiClient
+            return GeminiClient()
+        return None
+
     if os.environ.get("ANTHROPIC_API_KEY"):
         return ClaudeClient()
+
     return None
 
 
@@ -62,8 +77,9 @@ def process_new_upload(project_id: str, uploaded_path: str):
             case = _detect_demo_case(rfp_text)
             if case is None:
                 raise RuntimeError(
-                    "No ANTHROPIC_API_KEY is set, and this RFP doesn't match a known demo "
-                    "sample. Set ANTHROPIC_API_KEY to process real bid invitations."
+                    "No ANTHROPIC_API_KEY or GEMINI_API_KEY is set, and this RFP doesn't "
+                    "match a known demo sample. Set one of those environment variables to "
+                    "process real bid invitations."
                 )
             from pipeline.demo_data import LAKEVIEW_ITEMS, NORTHFIELD_ITEMS
             from pipeline.demo_data_cedarvalley import CEDARVALLEY_ITEMS
@@ -71,7 +87,7 @@ def process_new_upload(project_id: str, uploaded_path: str):
             raw_items = demo_map[case]
             result = Phase1Result.from_raw(guess_project_title(rfp_text), guess_agency(rfp_text), raw_items)
         elif client is None:
-            raise RuntimeError("No ANTHROPIC_API_KEY set. Configure it to process bid invitations.")
+            raise RuntimeError("No ANTHROPIC_API_KEY or GEMINI_API_KEY set. Configure one to process bid invitations.")
         else:
             result = run_phase1(rfp_text, client)
 
@@ -143,7 +159,7 @@ def process_client_responses(project_id: str, filled_doc_path: str):
             from pipeline.test_phase2 import DEMO_RESOLUTIONS
             result = resolve_with_responses(result, responses, client=None, demo_resolutions=DEMO_RESOLUTIONS)
         elif client is None:
-            raise RuntimeError("No ANTHROPIC_API_KEY set.")
+            raise RuntimeError("No ANTHROPIC_API_KEY or GEMINI_API_KEY set.")
         else:
             result = resolve_with_responses(result, responses, client=client)
 
@@ -171,7 +187,7 @@ def _run_phase3_and_4(project_id: str, result: Phase1Result, client: ClaudeClien
         phase3 = run_phase3(result, duration_months, demo_technology_approach=LAKEVIEW_TECH_APPROACH,
                              demo_staffing_plan=LAKEVIEW_STAFFING_PLAN)
     elif client is None:
-        raise RuntimeError("No ANTHROPIC_API_KEY set.")
+        raise RuntimeError("No ANTHROPIC_API_KEY or GEMINI_API_KEY set.")
     else:
         phase3 = run_phase3(result, duration_months, client=client)
 
@@ -183,7 +199,7 @@ def _run_phase3_and_4(project_id: str, result: Phase1Result, client: ClaudeClien
         from pipeline.narrative_demo_data import DEMO_NARRATIVE
         content = run_phase4(result, phase3, duration_months, demo_narrative=DEMO_NARRATIVE)
     elif client is None:
-        raise RuntimeError("No ANTHROPIC_API_KEY set.")
+        raise RuntimeError("No ANTHROPIC_API_KEY or GEMINI_API_KEY set.")
     else:
         content = run_phase4(result, phase3, duration_months, client=client)
 
