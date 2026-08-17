@@ -1,0 +1,35 @@
+REQUEST FOR PROPOSAL (RFP) No. 2026-EDU-089
+Issuing Agency: Cedar Valley Unified School District
+
+PROJECT TITLE: District-Wide Network Infrastructure Upgrade
+
+1. BACKGROUND
+Cedar Valley Unified School District operates 12 school buildings on a network infrastructure
+that has not been meaningfully upgraded in over a decade. With increasing reliance on
+1:1 student device programs and cloud-based instructional tools, the District requires a
+qualified vendor to modernize its network infrastructure.
+
+2. SCOPE OF WORK
+The selected vendor shall:
+  a. Replace core network switches across all 12 school buildings to support gigabit
+     connectivity to every classroom.
+  b. Provide wireless access point coverage sufficient to support the District's 1:1 student
+     device program in all classrooms.
+  c. Improve the District's overall network security posture.
+  d. Ensure content filtering complies with the Children's Internet Protection Act (CIPA).
+  e. Migrate the District's on-premises file servers to a cloud environment.
+  f. Provide a network monitoring and alerting dashboard for District IT staff.
+  g. Complete all work during the summer break before the next school year begins.
+  h. Provide staff training on any new network security tools introduced.
+
+3. PROPOSAL REQUIREMENTS
+Proposals must include an Executive Summary, Technical Approach, Team Qualifications,
+Relevant Past Performance, and a Compliance Matrix addressing each item in Section 2.
+
+4. SUBMISSION DEADLINE
+Proposals are due 30 days from the date of RFP issuance.
+
+5. POINT OF CONTACT
+Angela Torres, Director of Technology
+Cedar Valley Unified School District
+atorres@cedarvalleyusd.example.gov

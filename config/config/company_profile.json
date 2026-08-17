@@ -1,0 +1,76 @@
+{
+  "company_name": "Meridian Systems Group",
+  "tagline": "Engineering reliable technology for public-sector and enterprise missions",
+  "founded_year": 2011,
+  "hq_location": "Austin, TX",
+  "employee_count": 140,
+  "certifications": ["ISO 9001:2015", "CMMI Level 3", "SOC 2 Type II", "8(a) Certified", "WOSB"],
+  "core_capabilities": [
+    "Cloud infrastructure modernization (AWS, Azure, GovCloud)",
+    "Custom software development (full-stack, cloud-native)",
+    "Data analytics & business intelligence",
+    "Cybersecurity & compliance (FedRAMP, NIST 800-53)",
+    "IT service management & 24/7 helpdesk operations",
+    "Agile program management (PMP, SAFe certified staff)",
+    "Systems integration (GIS, ERP, legacy modernization)"
+  ],
+  "differentiators": [
+    "97% client retention rate over the past 5 years",
+    "Average of 14 years of experience per technical lead",
+    "In-house Security Operations Center (SOC) with 24/7 monitoring",
+    "Proprietary Agile-Gov delivery framework tailored to public-sector procurement cycles",
+    "Zero missed contractual milestones across active federal and state contracts in the past 3 years"
+  ],
+  "past_performance": [
+    {
+      "client": "State Department of Transportation",
+      "contract_value": "$4.2M",
+      "duration": "2021-2024",
+      "summary": "Modernized a legacy permitting system serving 1.2M annual transactions, reducing processing time by 63% and achieving 99.95% uptime."
+    },
+    {
+      "client": "County Health & Human Services Agency",
+      "contract_value": "$2.8M",
+      "duration": "2020-2023",
+      "summary": "Delivered a HIPAA-compliant case management platform for 45 caseworkers, cutting average case resolution time from 21 to 9 days."
+    },
+    {
+      "client": "Regional Transit Authority",
+      "contract_value": "$1.9M",
+      "duration": "2022-2025",
+      "summary": "Built a real-time fleet analytics dashboard integrating GPS, maintenance, and ridership data across 340 vehicles."
+    },
+    {
+      "client": "State Department of Revenue",
+      "contract_value": "$3.1M",
+      "duration": "2023-2026",
+      "summary": "Delivered a NIST 800-53 moderate-impact compliant tax filing portal, migrating 900,000 historical taxpayer records with zero data-loss incidents."
+    }
+  ],
+  "key_personnel": [
+    {
+      "name": "Dana Whitfield",
+      "role": "Program Manager",
+      "credentials": "PMP, 16 years managing public-sector IT programs",
+      "bio": "Dana has led delivery on five state-level modernization contracts, each completed on time and under budget."
+    },
+    {
+      "name": "Marcus Ojo",
+      "role": "Technical Lead / Solutions Architect",
+      "credentials": "AWS Certified Solutions Architect - Professional, 12 years in cloud architecture",
+      "bio": "Marcus specializes in secure, scalable architectures for regulated environments including FedRAMP Moderate systems."
+    },
+    {
+      "name": "Priya Raman",
+      "role": "Security & Compliance Lead",
+      "credentials": "CISSP, NIST 800-53 RMF certified",
+      "bio": "Priya has authored ATO packages for six government systems and leads Meridian's internal SOC."
+    }
+  ],
+  "contact": {
+    "name": "Dana Whitfield",
+    "title": "VP of Proposals & Partnerships",
+    "email": "d.whitfield@meridiansystemsgroup.example",
+    "phone": "(512) 555-0148"
+  }
+}

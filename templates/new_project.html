@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}New Project — RFP Proposal Agent{% endblock %}
+{% block content %}
+<h1>New Project</h1>
+<p>Upload a bid invitation to start the automated review. The agent will extract requirements,
+   flag anything ambiguous, and either send you clarification questions to forward to the
+   client, or proceed straight to a full proposal draft.</p>
+
+<form action="/projects" method="post" enctype="multipart/form-data" class="upload-form">
+    <div class="form-field">
+        <label for="project_name">Project name</label>
+        <input type="text" id="project_name" name="project_name" required
+               placeholder="e.g. City of Lakeview — Service Portal Modernization">
+    </div>
+    <div class="form-field">
+        <label for="bid_file">Bid invitation file (PDF, Word, or text)</label>
+        <input type="file" id="bid_file" name="bid_file" accept=".pdf,.docx,.txt" required>
+    </div>
+    <button type="submit" class="btn-primary">Start Review</button>
+</form>
+{% endblock %}

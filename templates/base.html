@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}RFP Proposal Agent{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <header class="site-header">
+        <nav aria-label="Main navigation">
+            <a href="/" class="brand">RFP Proposal Agent</a>
+            <a href="/new" class="nav-link">+ New Project</a>
+            <a href="/audit" class="nav-link">Audit Log</a>
+        </nav>
+    </header>
+    <main id="main-content">
+        {% block content %}{% endblock %}
+    </main>
+    <footer class="site-footer">
+        <p>Internal tool — shared access, no login. See deployment README before exposing beyond your internal network.</p>
+    </footer>
+</body>
+</html>

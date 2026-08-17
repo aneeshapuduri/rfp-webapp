@@ -1,0 +1,54 @@
+REQUEST FOR PROPOSAL (RFP) No. 2026-IT-114
+Issuing Agency: City of Lakeview Public Works Department
+
+PROJECT TITLE: Modernization of the Citizen Service Request Portal
+
+1. BACKGROUND
+The City of Lakeview currently operates a citizen service request system (pothole reports,
+sanitation issues, code enforcement, etc.) built on a 15-year-old legacy platform. The system
+is difficult to maintain, lacks mobile support, and cannot integrate with the City's GIS or
+work-order systems. The City seeks a qualified vendor to design, build, and deploy a modern,
+cloud-based replacement.
+
+2. SCOPE OF WORK
+The selected vendor shall:
+  a. Design and develop a cloud-hosted citizen service request portal accessible via web and
+     mobile browser, supporting at least 50,000 monthly active residents.
+  b. Integrate the portal with the City's existing GIS platform (Esri ArcGIS) for
+     location-based reporting and routing.
+  c. Integrate with the City's work-order management system for automatic ticket creation
+     and status sync.
+  d. Provide a public-facing dashboard showing aggregate request status and resolution times.
+  e. Ensure the system meets WCAG 2.1 AA accessibility standards.
+  f. Provide role-based access for City staff (dispatchers, field crews, supervisors,
+     administrators).
+  g. Migrate historical request data (approx. 380,000 records) from the legacy system.
+  h. Provide a security architecture consistent with NIST 800-53 moderate-impact controls.
+  i. Provide 12 months of post-launch support and a knowledge transfer plan to City IT staff.
+  j. Deliver the system within 9 months of contract award.
+
+3. PROPOSAL REQUIREMENTS
+Proposals must include, at minimum:
+  - Executive Summary
+  - Understanding of the Problem
+  - Technical Approach and Methodology
+  - Proposed Project Timeline / Schedule
+  - Team Qualifications and Key Personnel
+  - Relevant Past Performance (minimum 3 examples)
+  - Compliance Matrix addressing each requirement in Section 2
+  - Cost Proposal (separate sealed document, not addressed here)
+
+4. EVALUATION CRITERIA
+  - Technical Approach: 35%
+  - Team Qualifications & Past Performance: 25%
+  - Accessibility & Security Approach: 20%
+  - Schedule Feasibility: 10%
+  - Cost (evaluated separately): 10%
+
+5. SUBMISSION DEADLINE
+Proposals are due no later than 5:00 PM local time, 45 days from the date of RFP issuance.
+
+6. POINT OF CONTACT
+Renee Castillo, Procurement Officer
+City of Lakeview Public Works Department
+procurement@lakeview.example.gov

@@ -1,0 +1,32 @@
+REQUEST FOR PROPOSAL (RFP) No. 2026-IT-227
+Issuing Agency: Northfield County Emergency Services
+
+PROJECT TITLE: Emergency Dispatch System Upgrade
+
+1. BACKGROUND
+Northfield County's emergency dispatch operations rely on an aging system that dispatchers
+report is increasingly unreliable. The County wishes to modernize the platform to improve
+reliability and responder coordination.
+
+2. SCOPE OF WORK
+The selected vendor shall:
+  a. Upgrade the County's dispatch software to improve reliability and reduce downtime.
+  b. Ensure the system integrates with responder communication tools.
+  c. Support the County's dispatch volume, which has grown in recent years.
+  d. Provide appropriate data security for sensitive dispatch and responder information.
+  e. Host the solution in an environment consistent with County IT standards.
+  f. Migrate existing dispatch records to the new system.
+  g. Provide staff training and ongoing support after go-live.
+  h. Complete the project as quickly as reasonably possible given the urgency of the need.
+
+3. PROPOSAL REQUIREMENTS
+Proposals must include an Executive Summary, Technical Approach, Team Qualifications,
+Relevant Past Performance, and a Compliance Matrix addressing each item in Section 2.
+
+4. SUBMISSION DEADLINE
+Proposals are due 30 days from the date of RFP issuance.
+
+5. POINT OF CONTACT
+James Okafor, Procurement Officer
+Northfield County Emergency Services
+procurement@northfieldcounty.example.gov

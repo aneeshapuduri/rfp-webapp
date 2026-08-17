@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Audit Log — RFP Proposal Agent{% endblock %}
+{% block content %}
+<h1>Audit Log</h1>
+<p>Every upload, pipeline stage, document download, and status change is logged here per the
+   platform's audit requirements.</p>
+<table class="audit-table">
+    <caption class="visually-hidden">Audit log of all system actions</caption>
+    <thead>
+        <tr>
+            <th scope="col">Time (UTC)</th>
+            <th scope="col">Action</th>
+            <th scope="col">Project</th>
+            <th scope="col">Detail</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for e in entries %}
+        <tr>
+            <td>{{ e.timestamp[:19] }}</td>
+            <td>{{ e.action }}</td>
+            <td>{% if e.project_id %}<a href="/projects/{{ e.project_id }}">{{ e.project_id[:8] }}…</a>{% else %}—{% endif %}</td>
+            <td><code>{{ e.detail or "" }}</code></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

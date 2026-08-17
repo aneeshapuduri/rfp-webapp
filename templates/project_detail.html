@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} — RFP Proposal Agent{% endblock %}
+{% block content %}
+<p><a href="/">&larr; Back to all projects</a></p>
+<h1>{{ project.name }}</h1>
+<p class="agency-line">{{ project.agency or "Agency not yet identified" }}</p>
+
+<div class="status-panel">
+    <span class="status-badge status-{{ project.status | replace(' ', '-') | lower }}">
+        <span class="status-dot" aria-hidden="true"></span>
+        {{ project.status_label }}
+    </span>
+
+    <form action="/projects/{{ project.id }}/status" method="post" class="inline-form">
+        <label for="status-select" class="visually-hidden">Change status</label>
+        <select id="status-select" name="status" onchange="this.form.submit()">
+            {% for s in ["Analyzing", "Clarifications Sent", "Responses Pending", "Ready to Generate", "Submitted"] %}
+            <option value="{{ s }}" {% if s == project.status %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+        </select>
+    </form>
+</div>
+
+{% if project.error_message %}
+<div class="alert alert-error" role="alert">
+    <strong>Something went wrong during processing:</strong>
+    <pre>{{ project.error_message }}</pre>
+</div>
+{% endif %}
+
+{% if project.status == "Analyzing" and not project.error_message %}
+<div class="alert alert-info" role="status">Processing — this page will show results once analysis completes. Refresh to check progress.</div>
+{% endif %}
+
+<section aria-labelledby="documents-heading">
+    <h2 id="documents-heading">Documents</h2>
+    {% if documents %}
+    <ul class="document-list">
+        {% for d in documents %}
+        <li>
+            <a href="/projects/{{ project.id }}/documents/{{ d.id }}">{{ d.filename }}</a>
+            <span class="doc-meta">({{ d.doc_type | replace('_', ' ') }} — uploaded {{ d.uploaded_at[:10] }})</span>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p>No documents yet.</p>
+    {% endif %}
+</section>
+
+{% if can_upload_responses %}
+<section aria-labelledby="responses-heading">
+    <h2 id="responses-heading">Upload Client Responses</h2>
+    <p>Once the client has answered the clarification questions, upload their filled-in
+       document here to resume automatic processing.</p>
+    <form action="/projects/{{ project.id }}/responses" method="post" enctype="multipart/form-data" class="upload-form">
+        <div class="form-field">
+            <label for="responses_file">Filled-in clarification questions document</label>
+            <input type="file" id="responses_file" name="responses_file" accept=".docx" required>
+        </div>
+        <button type="submit" class="btn-primary">Upload &amp; Resume</button>
+    </form>
+</section>
+{% endif %}
+
+{% if requirements %}
+<section aria-labelledby="requirements-heading">
+    <h2 id="requirements-heading">Extracted Requirements</h2>
+    <table class="requirements-table">
+        <caption class="visually-hidden">Extracted requirements with status</caption>
+        <thead>
+            <tr>
+                <th scope="col">Requirement</th>
+                <th scope="col">Status</th>
+                <th scope="col">Detail</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in requirements %}
+            <tr>
+                <td>{{ r.requirement }}</td>
+                <td>
+                    <span class="req-status req-status-{{ r.status | replace('_','-') }}">
+                        {% if r.status == "clear" %}✓ Clear
+                        {% elif r.status == "ambiguous" %}⚠ Ambiguous
+                        {% elif r.status == "assumption_needed" %}~ Assumption Made
+                        {% endif %}
+                        {% if r.escalated_for_manual_review %} (Escalated){% endif %}
+                    </span>
+                </td>
+                <td>
+                    {% if r.clarification_question %}<em>Q:</em> {{ r.clarification_question }}{% endif %}
+                    {% if r.assumption_text %}<em>Assumed:</em> {{ r.assumption_text }}{% endif %}
+                    {% if r.client_response %}<br><em>Client said:</em> {{ r.client_response }}{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+{% if pricing %}
+<section aria-labelledby="pricing-heading">
+    <h2 id="pricing-heading">Effort &amp; Pricing Summary</h2>
+    <p class="pricing-total">Total: <strong>${{ "{:,.2f}".format(pricing.total) }}</strong>
+       ({{ pricing.total_hours }} hours, {{ pricing.contingency_pct }}% contingency)</p>
+</section>
+{% endif %}
+
+{% if compliance_matrix %}
+<section aria-labelledby="compliance-heading">
+    <h2 id="compliance-heading">Compliance Matrix</h2>
+    <table class="compliance-table">
+        <caption class="visually-hidden">Compliance matrix covering every extracted requirement</caption>
+        <thead>
+            <tr>
+                <th scope="col">Requirement</th>
+                <th scope="col">Response</th>
+                <th scope="col">Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in compliance_matrix %}
+            <tr>
+                <td>{{ m.requirement }}</td>
+                <td>{{ m.response }}</td>
+                <td>{{ m.status }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="coverage-note">{{ compliance_matrix | length }} of {{ compliance_matrix | length }} requirements covered.</p>
+</section>
+{% endif %}
+
+<section aria-labelledby="danger-heading">
+    <h2 id="danger-heading" class="visually-hidden">Project actions</h2>
+    <form action="/projects/{{ project.id }}/delete" method="post"
+          onsubmit="return confirm('Delete this project? It can be restored within 30 days by an administrator.');">
+        <button type="submit" class="btn-danger">Delete Project</button>
+    </form>
+</section>
+{% endblock %}
