@@ -1,9 +1,15 @@
-fastapi>=0.110.0
-uvicorn[standard]>=0.29.0
-python-multipart>=0.0.9
-jinja2>=3.1.0
-cryptography>=42.0.0
-anthropic>=0.40.0
-google-genai>=0.3.0
-python-docx>=1.1.0
-pypdf>=4.0.0
+# Pinned to exact versions verified working together (see README for how to upgrade
+# deliberately). The original requirements.txt used open-ended '>=' with no upper bound,
+# which the code review flagged as a reproducibility/supply-chain risk — a fresh install could
+# silently pull in a newer, untested, or vulnerable release of any of these.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+starlette==1.6.0
+itsdangerous==2.2.0
+python-multipart==0.0.32
+Jinja2==3.1.6
+cryptography==50.0.1
+anthropic==1.2.0
+google-genai==2.20.0
+python-docx==1.2.0
+pypdf==6.16.2

@@ -7,11 +7,17 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import pathlib
 import sqlite3
 import uuid
 
-DB_PATH = pathlib.Path(__file__).resolve().parent / "data" / "app.db"
+# DATA_DIR is configurable so a deployment on a platform with an ephemeral filesystem (Render,
+# Heroku, most container platforms) can point this at a mounted persistent disk instead of the
+# app's own directory, which gets wiped on every redeploy. Defaults to the old behavior
+# (a 'data' folder next to the app) for local/VPS use where the app directory itself persists.
+DATA_DIR = pathlib.Path(os.environ.get("DATA_DIR") or (pathlib.Path(__file__).resolve().parent / "data"))
+DB_PATH = DATA_DIR / "app.db"
 
 VALID_STATUSES = [
     "Analyzing",
@@ -35,7 +41,9 @@ CREATE TABLE IF NOT EXISTS projects (
     phase3_result_json TEXT,
     phase4_content_json TEXT,
     clarification_mapping_json TEXT,
-    duration_months REAL DEFAULT 9
+    capability_fit_json TEXT,
+    duration_months REAL DEFAULT 9,
+    created_by TEXT
 );
 
 CREATE TABLE IF NOT EXISTS documents (
@@ -45,6 +53,7 @@ CREATE TABLE IF NOT EXISTS documents (
     filename TEXT NOT NULL,
     storage_path TEXT NOT NULL,
     uploaded_at TEXT NOT NULL,
+    encrypted INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (project_id) REFERENCES projects(id)
 );
 
@@ -56,7 +65,25 @@ CREATE TABLE IF NOT EXISTS audit_log (
     detail TEXT,
     user_identity TEXT DEFAULT 'shared-user'
 );
+
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member',   -- 'admin' | 'member'
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    created_by TEXT
+);
 """
+
+# Columns added after the initial release — applied with ALTER TABLE for databases created
+# before this column existed, so upgrading in place never breaks on a missing column.
+_MIGRATIONS = [
+    ("projects", "capability_fit_json", "TEXT"),
+    ("projects", "created_by", "TEXT"),
+    ("documents", "encrypted", "INTEGER NOT NULL DEFAULT 0"),
+]
 
 
 def get_conn() -> sqlite3.Connection:
@@ -67,15 +94,23 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _apply_migrations(conn: sqlite3.Connection):
+    for table, column, coltype in _MIGRATIONS:
+        cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+
+
 def init_db():
     conn = get_conn()
     conn.executescript(SCHEMA)
+    _apply_migrations(conn)
     conn.commit()
     conn.close()
 
 
 def now() -> str:
-    return datetime.datetime.utcnow().isoformat()
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
 def new_id() -> str:
@@ -84,13 +119,13 @@ def new_id() -> str:
 
 # ---------- Projects ----------
 
-def create_project(name: str, agency: str = "") -> str:
+def create_project(name: str, agency: str = "", created_by: str | None = None) -> str:
     pid = new_id()
     conn = get_conn()
     conn.execute(
-        "INSERT INTO projects (id, name, agency, status, created_at, updated_at, duration_months) "
-        "VALUES (?, ?, ?, 'Analyzing', ?, ?, 9)",
-        (pid, name, agency, now(), now()),
+        "INSERT INTO projects (id, name, agency, status, created_at, updated_at, duration_months, created_by) "
+        "VALUES (?, ?, ?, 'Analyzing', ?, ?, 9, ?)",
+        (pid, name, agency, now(), now(), created_by),
     )
     conn.commit()
     conn.close()
@@ -138,13 +173,13 @@ def restore_project(project_id: str):
 
 # ---------- Documents ----------
 
-def add_document(project_id: str, doc_type: str, filename: str, storage_path: str) -> str:
+def add_document(project_id: str, doc_type: str, filename: str, storage_path: str, encrypted: bool = False) -> str:
     doc_id = new_id()
     conn = get_conn()
     conn.execute(
-        "INSERT INTO documents (id, project_id, doc_type, filename, storage_path, uploaded_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (doc_id, project_id, doc_type, filename, storage_path, now()),
+        "INSERT INTO documents (id, project_id, doc_type, filename, storage_path, uploaded_at, encrypted) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (doc_id, project_id, doc_type, filename, storage_path, now(), 1 if encrypted else 0),
     )
     conn.commit()
     conn.close()
@@ -169,13 +204,15 @@ def get_document(doc_id: str) -> dict | None:
 
 # ---------- Audit log ----------
 
-def log_action(action: str, project_id: str | None = None, detail: dict | str | None = None):
+def log_action(action: str, project_id: str | None = None, detail: dict | str | None = None,
+               user_identity: str = "system"):
     if isinstance(detail, dict):
         detail = json.dumps(detail)
     conn = get_conn()
     conn.execute(
-        "INSERT INTO audit_log (id, timestamp, project_id, action, detail) VALUES (?, ?, ?, ?, ?)",
-        (new_id(), now(), project_id, action, detail),
+        "INSERT INTO audit_log (id, timestamp, project_id, action, detail, user_identity) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (new_id(), now(), project_id, action, detail, user_identity),
     )
     conn.commit()
     conn.close()
@@ -194,3 +231,64 @@ def list_audit_log(project_id: str | None = None, limit: int = 500) -> list[dict
         ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ---------- Users ----------
+# Passwords are never stored in plaintext — see auth.py for hashing. This module only ever
+# stores/compares the resulting hash string.
+
+def create_user(username: str, password_hash: str, role: str = "member", created_by: str | None = None) -> str:
+    uid = new_id()
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO users (id, username, password_hash, role, is_active, created_at, created_by) "
+        "VALUES (?, ?, ?, ?, 1, ?, ?)",
+        (uid, username.strip().lower(), password_hash, role, now(), created_by),
+    )
+    conn.commit()
+    conn.close()
+    return uid
+
+
+def get_user_by_username(username: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM users WHERE username = ?", (username.strip().lower(),)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_user(user_id: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def list_users() -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM users ORDER BY created_at ASC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def count_users() -> int:
+    conn = get_conn()
+    n = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+    conn.close()
+    return n
+
+
+def set_user_active(user_id: str, is_active: bool):
+    conn = get_conn()
+    conn.execute("UPDATE users SET is_active = ? WHERE id = ?", (1 if is_active else 0, user_id))
+    conn.commit()
+    conn.close()
+
+
+def set_user_password(user_id: str, password_hash: str):
+    conn = get_conn()
+    conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id))
+    conn.commit()
+    conn.close()

@@ -1,0 +1,45 @@
+# Render Blueprint for the RFP Proposal Agent.
+#
+# Using this file: in the Render dashboard, "New +" -> "Blueprint", point it at the git repo
+# this file lives in, and Render reads this to create the service. You can also just create a
+# plain "Web Service" by hand in the dashboard and copy these same settings in — this file is
+# a convenience, not a requirement.
+#
+# IMPORTANT — persistent disk: this app stores everything (the SQLite database, uploaded
+# documents, generated proposals) as local files. Render's default web service filesystem is
+# EPHEMERAL — it is wiped on every deploy and every restart. The `disk:` block below attaches a
+# persistent disk and DATA_DIR points the app at it, so data survives deploys. Persistent disks
+# require a paid instance type — they are NOT available on Render's free plan. If you deploy
+# this on the free plan without a disk, every redeploy (including Render's automatic nightly
+# restarts on some plans) silently wipes all projects, users, and documents. Plan accordingly.
+services:
+  - type: web
+    name: rfp-proposal-agent
+    runtime: python
+    plan: starter          # smallest plan that supports a persistent disk; free plan cannot use one
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /login
+    envVars:
+      - key: DATA_DIR
+        value: /var/data
+      - key: SESSION_SECRET
+        generateValue: true       # Render generates and stores a random secret for you
+      - key: ADMIN_USERNAME
+        sync: false               # set in the Render dashboard, not committed to git
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DEMO_MODE
+        value: "false"
+      - key: SESSION_COOKIE_SECURE
+        value: "true"     # Render always serves your public URL over HTTPS, so this is safe
+    disk:
+      name: rfp-agent-data
+      mountPath: /var/data
+      sizeGB: 1
