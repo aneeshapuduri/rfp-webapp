@@ -287,6 +287,26 @@ def set_user_active(user_id: str, is_active: bool):
     conn.close()
 
 
+def delete_user(user_id: str):
+    """Permanently removes a user account. Safe to hard-delete (rather than soft-delete like
+    projects) because nothing else references users.id as a foreign key — projects.created_by
+    and audit_log.user_identity both store the username as a plain string at the time of the
+    action, so history stays readable even after the account is gone."""
+    conn = get_conn()
+    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def count_active_admins() -> int:
+    conn = get_conn()
+    n = conn.execute(
+        "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND is_active = 1"
+    ).fetchone()["n"]
+    conn.close()
+    return n
+
+
 def set_user_password(user_id: str, password_hash: str):
     conn = get_conn()
     conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id))

@@ -403,8 +403,27 @@ def admin_deactivate_user(request: Request, user_id: str, _: None = Depends(auth
         raise HTTPException(404, "User not found.")
     if target["id"] == admin_user["id"]:
         raise HTTPException(400, "You can't deactivate your own account.")
+    if target["role"] == "admin" and target["is_active"] and db.count_active_admins() <= 1:
+        raise HTTPException(400, "You can't deactivate the last active admin — promote another "
+                                  "account to admin first.")
     db.set_user_active(user_id, False)
     db.log_action("user_deactivated", detail={"target_username": target["username"]}, user_identity=admin_user["username"])
+    return RedirectResponse("/admin/users", status_code=303)
+
+
+@app.post("/admin/users/{user_id}/delete")
+def admin_delete_user(request: Request, user_id: str, _: None = Depends(auth.verify_csrf)):
+    admin_user = auth.current_user(request)
+    target = db.get_user(user_id)
+    if not target:
+        raise HTTPException(404, "User not found.")
+    if target["id"] == admin_user["id"]:
+        raise HTTPException(400, "You can't delete your own account.")
+    if target["role"] == "admin" and target["is_active"] and db.count_active_admins() <= 1:
+        raise HTTPException(400, "You can't delete the last active admin — promote another "
+                                  "account to admin first.")
+    db.delete_user(user_id)
+    db.log_action("user_deleted", detail={"target_username": target["username"]}, user_identity=admin_user["username"])
     return RedirectResponse("/admin/users", status_code=303)
 
 
