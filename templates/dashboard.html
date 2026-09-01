@@ -20,7 +20,6 @@
         <thead>
             <tr>
                 <th scope="col">Project</th>
-                <th scope="col">Agency</th>
                 <th scope="col">Status</th>
                 <th scope="col">Est. Value</th>
                 <th scope="col">Created</th>
@@ -31,7 +30,6 @@
             {% for p in projects %}
             <tr class="clickable-row">
                 <td><a href="/projects/{{ p.id }}">{{ p.name }}</a></td>
-                <td>{{ p.agency or "—" }}</td>
                 <td>
                     <span class="status-pill status-{{ p.status | replace(' ', '-') | lower }}">
                         {{ status_icon(p.status, p.error_message) }}
