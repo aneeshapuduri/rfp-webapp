@@ -25,6 +25,7 @@ VALID_STATUSES = [
     "Responses Pending",
     "Ready to Generate",
     "Submitted",
+    "Declined",
 ]
 
 SCHEMA = """

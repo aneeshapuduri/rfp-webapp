@@ -11,7 +11,8 @@ Routes:
   GET  /projects/{id}                 project detail view
   POST /projects/{id}/responses       upload filled-in client responses, resumes pipeline
   GET  /projects/{id}/documents/{did} download a document
-  POST /projects/{id}/status          manually update status (e.g. mark Submitted)
+  POST /projects/{id}/approve         mark Submitted — only valid from 'Ready to Generate'
+  POST /projects/{id}/reject          mark Declined — only valid from 'Ready to Generate'
   POST /projects/{id}/delete          soft-delete a project
   GET  /audit                         audit log view
   GET  /admin/users, POST /admin/users, POST /admin/users/{id}/deactivate   admin-only user management
@@ -77,6 +78,7 @@ STATUS_LABELS = {
     "Responses Pending": "Responses Pending",
     "Ready to Generate": "Ready for Review",
     "Submitted": "Submitted",
+    "Declined": "Declined",
 }
 
 # The order the pipeline actually moves projects through — used both for the project-detail
@@ -340,13 +342,36 @@ def download_document(request: Request, project_id: str, doc_id: str):
     )
 
 
-@app.post("/projects/{project_id}/status")
-def update_status(request: Request, project_id: str, status: str = Form(...), _: None = Depends(auth.verify_csrf)):
+def _require_ready_to_generate(project_id: str) -> dict:
+    """Every status up to 'Ready to Generate' is set by the pipeline itself, not by a person —
+    Analyzing/Clarifications Sent/Responses Pending all flip automatically as processing moves
+    forward (see pipeline_runner.py). The one point that genuinely needs a human call is once
+    the compliance matrix and pricing are ready: someone has to decide whether to actually
+    submit. That's the only manual state change this app allows, so both routes below re-check
+    the current status server-side rather than trusting whatever the form said."""
+    project = db.get_project(project_id)
+    if not project or project["deleted_at"]:
+        raise HTTPException(404, "Project not found.")
+    if project["status"] != "Ready to Generate":
+        raise HTTPException(400, "This project isn't at the review step yet — there's nothing to approve or reject.")
+    return project
+
+
+@app.post("/projects/{project_id}/approve")
+def approve_project(request: Request, project_id: str, _: None = Depends(auth.verify_csrf)):
     user = auth.current_user(request)
-    if status not in db.VALID_STATUSES:
-        raise HTTPException(400, f"Invalid status. Must be one of: {db.VALID_STATUSES}")
-    db.update_project(project_id, status=status)
-    db.log_action("status_changed_manually", project_id, {"new_status": status}, user_identity=user["username"])
+    _require_ready_to_generate(project_id)
+    db.update_project(project_id, status="Submitted")
+    db.log_action("project_approved", project_id, user_identity=user["username"])
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+@app.post("/projects/{project_id}/reject")
+def reject_project(request: Request, project_id: str, _: None = Depends(auth.verify_csrf)):
+    user = auth.current_user(request)
+    _require_ready_to_generate(project_id)
+    db.update_project(project_id, status="Declined")
+    db.log_action("project_declined", project_id, user_identity=user["username"])
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
