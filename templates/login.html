@@ -1,26 +1,72 @@
 {% extends "base.html" %}
 {% block title %}Sign in — RFP Proposal Agent{% endblock %}
 {% block auth_content %}
-<div class="login-card">
-    <h1>Sign in</h1>
-    <p>RFP Proposal Agent is an internal tool — sign in with the account an admin created for you.</p>
-
-    {% if error %}
-    <div class="alert alert-error" role="alert">{{ error }}</div>
-    {% endif %}
-
-    <form action="/login" method="post" class="upload-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="next" value="{{ next }}">
-        <div class="form-field">
-            <label for="username">Username</label>
-            <input type="text" id="username" name="username" required autocomplete="username" autofocus>
+<div class="auth-visual">
+    <div class="auth-visual__pattern" aria-hidden="true"></div>
+    <div class="auth-visual__inner">
+        <div class="auth-visual__brand">
+            <div class="auth-visual__mark" aria-hidden="true">RA</div>
+            <span class="auth-visual__name">RFP Agent</span>
         </div>
-        <div class="form-field">
-            <label for="password">Password</label>
-            <input type="password" id="password" name="password" required autocomplete="current-password">
-        </div>
-        <button type="submit" class="btn-primary">Sign in</button>
-    </form>
+
+        <svg class="auth-visual__art" width="180" height="180" viewBox="0 0 180 180" fill="none" aria-hidden="true">
+            <circle cx="90" cy="90" r="88" stroke="rgba(255,255,255,.14)" stroke-width="1.5"/>
+            <circle cx="90" cy="90" r="66" stroke="rgba(255,255,255,.14)" stroke-width="1.5"/>
+            <rect x="52" y="42" width="76" height="96" rx="8" fill="#1F2E52" stroke="rgba(255,255,255,.35)" stroke-width="1.5"/>
+            <line x1="64" y1="62" x2="104" y2="62" stroke="#8FB3F5" stroke-width="3" stroke-linecap="round"/>
+            <line x1="64" y1="76" x2="116" y2="76" stroke="rgba(255,255,255,.5)" stroke-width="3" stroke-linecap="round"/>
+            <line x1="64" y1="90" x2="116" y2="90" stroke="rgba(255,255,255,.5)" stroke-width="3" stroke-linecap="round"/>
+            <line x1="64" y1="104" x2="98" y2="104" stroke="rgba(255,255,255,.5)" stroke-width="3" stroke-linecap="round"/>
+            <circle cx="128" cy="118" r="22" fill="#3B6FD1"/>
+            <path d="M118 118l7 7 14-14" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+
+        <h2>Every bid invitation, reviewed in minutes.</h2>
+        <p>RFP Agent reads a bid invitation, extracts every requirement, and tells your team exactly what needs a human decision.</p>
+
+        <ul class="auth-visual__points">
+            <li>
+                <span class="auth-visual__point-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="20 6 9 17 4 12"/></svg></span>
+                Extracts and classifies every requirement automatically
+            </li>
+            <li>
+                <span class="auth-visual__point-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="20 6 9 17 4 12"/></svg></span>
+                Flags ambiguity and drafts clarification questions
+            </li>
+            <li>
+                <span class="auth-visual__point-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="20 6 9 17 4 12"/></svg></span>
+                Runs a deterministic Go/No-Go capability check
+            </li>
+            <li>
+                <span class="auth-visual__point-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="20 6 9 17 4 12"/></svg></span>
+                Every action is attributed and audit-logged
+            </li>
+        </ul>
+    </div>
+</div>
+
+<div class="auth-form-panel">
+    <div class="login-card">
+        <h1>Sign in</h1>
+        <p>RFP Proposal Agent is an internal tool — sign in with the account an admin created for you.</p>
+
+        {% if error %}
+        <div class="alert alert-error" role="alert">{{ error }}</div>
+        {% endif %}
+
+        <form action="/login" method="post" class="upload-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="next" value="{{ next }}">
+            <div class="form-field">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required autocomplete="username" autofocus>
+            </div>
+            <div class="form-field">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required autocomplete="current-password">
+            </div>
+            <button type="submit" class="btn-primary" style="width:100%; justify-content:center;">Sign in</button>
+        </form>
+    </div>
 </div>
 {% endblock %}

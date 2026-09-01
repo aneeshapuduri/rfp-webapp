@@ -14,9 +14,16 @@
 {% if current_user %}
 <div class="shell">
   <nav class="sidebar" aria-label="Main navigation">
-    <div class="sidebar__brand">
+    <a class="sidebar__brand" href="/home" style="text-decoration:none;">
       <div class="sidebar__mark" aria-hidden="true">RA</div>
       <span class="sidebar__name">RFP Agent</span>
+    </a>
+
+    <div class="sidebar__nav">
+      <a class="sidebar__link{% if request.url.path == '/home' %} is-active{% endif %}" href="/home">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11.5L12 4l9 7.5"/><path d="M5 10v10a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V10"/></svg>
+        Home
+      </a>
     </div>
 
     <div class="sidebar__section-label">Overview</div>
