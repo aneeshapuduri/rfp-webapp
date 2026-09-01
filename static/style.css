@@ -531,3 +531,4 @@ select.text-input, select {
 }
 .sp-step h4 { font-size: .88rem; font-weight: 700; color: var(--navy); margin: 0 0 4px; }
 .sp-step p { font-size: .76rem; color: var(--ink-soft); margin: 0; line-height: 1.45; }
+.pipeline-caption { margin: 16px 0 2px; padding-top: 14px; border-top: 1px dashed var(--border); font-size: .84rem; color: var(--ink-soft); line-height: 1.6; }
