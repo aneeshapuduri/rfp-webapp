@@ -81,18 +81,10 @@ STATUS_LABELS = {
     "Declined": "Declined",
 }
 
-# The order the pipeline actually moves projects through — used both for the project-detail
-# stepper and for the Home page's "how it works" strip, so the two never describe different
-# pipelines.
+# The order the pipeline actually moves projects through — drives the project-detail stepper.
+# (The Home page's "how it works" panel is a separate, static explainer of the conceptual
+# document-processing stages, not this per-project status sequence — see templates/home.html.)
 STATUS_ORDER = ["Analyzing", "Clarifications Sent", "Responses Pending", "Ready to Generate", "Submitted"]
-
-STATUS_ORDER_DESCRIPTIONS = {
-    "Analyzing": "The bid invitation is parsed and every requirement is extracted and classified.",
-    "Clarifications Sent": "Anything ambiguous gets a clarification question queued for the client.",
-    "Responses Pending": "Waiting on the client's answers to resume automatically.",
-    "Ready to Generate": "Requirements are resolved — pricing and the compliance matrix are ready.",
-    "Submitted": "The proposal has been generated and marked submitted.",
-}
 
 
 def _enrich_project(p: dict) -> dict:
@@ -202,9 +194,6 @@ def home(request: Request):
         needs_attention=needs_attention,
         recent_projects=recent_projects,
         recent_activity=recent_activity,
-        pipeline_stages=[
-            {"name": s, "description": STATUS_ORDER_DESCRIPTIONS[s]} for s in STATUS_ORDER
-        ],
     ))
 
 
