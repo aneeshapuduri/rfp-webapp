@@ -1,106 +1,150 @@
 {% extends "base.html" %}
 {% block title %}{{ project.name }} — RFP Proposal Agent{% endblock %}
 {% block content %}
-<p><a href="/">&larr; Back to all projects</a></p>
-<h1>{{ project.name }}</h1>
-<p class="agency-line">{{ project.agency or "Agency not yet identified" }}</p>
+<a href="/" class="back-link">&larr; Back to all projects</a>
 
-<div class="status-panel">
-    <span class="status-badge status-{{ project.status | replace(' ', '-') | lower }}">
-        <span class="status-dot" aria-hidden="true"></span>
+<div class="page-head">
+    <div>
+        <h1>{{ project.name }}</h1>
+        <p class="agency-line">{{ project.agency or "Agency not yet identified" }}</p>
+    </div>
+    <span class="status-pill status-{{ project.status | replace(' ', '-') | lower }}">
+        {% if project.status == "Analyzing" %}<span class="pulse-dot" aria-hidden="true"></span>{% endif %}
         {{ project.status_label }}
     </span>
+</div>
 
-    <form action="/projects/{{ project.id }}/status" method="post" class="inline-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <label for="status-select" class="visually-hidden">Change status</label>
-        <select id="status-select" name="status" onchange="this.form.submit()">
-            {% for s in ["Analyzing", "Clarifications Sent", "Responses Pending", "Ready to Generate", "Submitted"] %}
-            <option value="{{ s }}" {% if s == project.status %}selected{% endif %}>{{ s }}</option>
-            {% endfor %}
-        </select>
-    </form>
+<div class="card">
+    {% set steps = ["Analyzing", "Clarifications Sent", "Responses Pending", "Ready to Generate", "Submitted"] %}
+    {% set ns = namespace(current_index=-1) %}
+    {% for s in steps %}{% if s == project.status %}{% set ns.current_index = loop.index0 %}{% endif %}{% endfor %}
+    <div class="stepper">
+        {% for s in steps %}
+        <div class="step {% if ns.current_index >= 0 and loop.index0 < ns.current_index %}is-done{% elif loop.index0 == ns.current_index %}is-current{% endif %}">
+            <div class="step__line"></div>
+            <div class="step__dot">{% if ns.current_index >= 0 and loop.index0 < ns.current_index %}✓{% else %}{{ loop.index }}{% endif %}</div>
+            <div class="step__label">{{ s }}</div>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="card__body" style="padding-top:0;">
+        <form action="/projects/{{ project.id }}/status" method="post" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label for="status-select" class="visually-hidden">Change status</label>
+            <select id="status-select" name="status" onchange="this.form.submit()" style="max-width:240px;">
+                {% for s in steps %}
+                <option value="{{ s }}" {% if s == project.status %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+        </form>
+    </div>
 </div>
 
 {% if project.error_message %}
-<div class="alert alert-error" role="alert">
-    <strong>Something went wrong during processing:</strong>
-    <pre>{{ project.error_message }}</pre>
+<div class="alert alert-error" role="alert" style="margin-top:20px;">
+    <div><strong>Something went wrong during processing:</strong><pre>{{ project.error_message }}</pre></div>
 </div>
 {% endif %}
 
 {% if project.status == "Analyzing" and not project.error_message %}
-<div class="alert alert-info" role="status">Processing — this page will show results once analysis completes. Refresh to check progress.</div>
+<div class="alert alert-info" role="status" style="margin-top:20px;">Processing — this page will show results once analysis completes. Refresh to check progress.</div>
 {% endif %}
 
 {% if capability_fit %}
-<section aria-labelledby="gate-heading">
-    <h2 id="gate-heading">Go / No-Go Decision</h2>
-    <p class="gate-recommendation gate-{{ capability_fit.overall | replace(', ', '-') | replace(' ', '-') | lower }}">
-        {{ capability_fit.overall }}
-    </p>
-    <p>{{ capability_fit.reasoning }}</p>
+<div class="card" aria-labelledby="gate-heading">
+    <div class="card__head"><h2 id="gate-heading">Go / No-Go Decision</h2></div>
+    <div class="card__body">
+        {% set rec_class = "rec-go" if capability_fit.overall == "Go" else ("rec-no-go" if capability_fit.overall == "No-Go" else "rec-go-with-gaps") %}
+        <div class="recommendation-banner {{ rec_class }}">
+            <div class="recommendation-banner__icon">
+                {% if capability_fit.overall == "Go" %}
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                {% elif capability_fit.overall == "No-Go" %}
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                {% else %}
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                {% endif %}
+            </div>
+            <div>
+                <div class="recommendation-banner__title">{{ capability_fit.overall }} &mdash; {{ capability_fit.coverage_pct }}% capability coverage</div>
+                <div class="recommendation-banner__text">{{ capability_fit.reasoning }}</div>
+            </div>
+        </div>
 
-    {% if capability_fit.matched_capabilities %}
-    <p class="capability-label">Matched against our stated capabilities:</p>
-    <ul class="capability-chips">
-        {% for c in capability_fit.matched_capabilities %}
-        <li class="cap-chip cap-chip-matched">✓ {{ c }}</li>
-        {% endfor %}
-        {% for c in capability_fit.unmatched_capabilities %}
-        <li class="cap-chip">{{ c }}</li>
-        {% endfor %}
-    </ul>
-    {% endif %}
+        {% if capability_fit.matched_capabilities or capability_fit.unmatched_capabilities %}
+        <div class="capability-ref">
+            <div class="capability-ref__label">Compared against our stated capabilities</div>
+            {% for c in capability_fit.matched_capabilities %}
+            <span class="cap-chip cap-chip-matched">✓ {{ c }}</span>
+            {% endfor %}
+            {% for c in capability_fit.unmatched_capabilities %}
+            <span class="cap-chip">{{ c }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
 
-    {% if capability_fit.gaps %}
-    <p class="capability-label">Requirements with no matching capability ({{ capability_fit.gaps | length }}):</p>
-    <ul class="fit-gap-list">
-        {% for g in capability_fit.gaps %}
-        <li>{{ g.requirement }}</li>
-        {% endfor %}
-    </ul>
-    {% endif %}
-    <p class="coverage-note">This is a deterministic keyword-based fit check against config/company_profile.json,
-       meant as a fast first read for the bid team — not a substitute for a human bid/no-bid call.</p>
-</section>
+        {% if capability_fit.gaps %}
+        <div class="capability-ref__label" style="margin-bottom:8px;">Requirements with no matching capability ({{ capability_fit.gaps | length }})</div>
+        <ul class="fit-list">
+            {% for g in capability_fit.gaps %}
+            <li class="fit-row fit-gap">
+                <span class="fit-row__icon" aria-hidden="true">!</span>
+                <div>
+                    <span class="fit-row__area">{{ g.requirement }}</span>
+                    <span class="fit-row__tag">Gap</span>
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+        <p class="coverage-note">This is a deterministic keyword-based fit check against config/company_profile.json,
+           meant as a fast first read for the bid team — not a substitute for a human bid/no-bid call.</p>
+    </div>
+</div>
 {% endif %}
 
-<section aria-labelledby="documents-heading">
-    <h2 id="documents-heading">Documents</h2>
+<div class="card" aria-labelledby="documents-heading">
+    <div class="card__head"><h2 id="documents-heading">Documents</h2></div>
     {% if documents %}
-    <ul class="document-list">
+    <ul class="doc-list">
         {% for d in documents %}
-        <li>
-            <a href="/projects/{{ project.id }}/documents/{{ d.id }}">{{ d.filename }}</a>
-            <span class="doc-meta">({{ d.doc_type | replace('_', ' ') }} — uploaded {{ d.uploaded_at[:10] }})</span>
+        <li class="doc-row">
+            <span class="doc-icon" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            </span>
+            <div>
+                <div class="doc-name"><a href="/projects/{{ project.id }}/documents/{{ d.id }}">{{ d.filename }}</a></div>
+                <div class="doc-meta">{{ d.doc_type | replace('_', ' ') }} — uploaded {{ d.uploaded_at[:10] }}</div>
+            </div>
         </li>
         {% endfor %}
     </ul>
     {% else %}
-    <p>No documents yet.</p>
+    <div class="card__body"><p style="margin:0; color:var(--ink-faint);">No documents yet.</p></div>
     {% endif %}
-</section>
+</div>
 
 {% if can_upload_responses %}
-<section aria-labelledby="responses-heading">
-    <h2 id="responses-heading">Upload Client Responses</h2>
-    <p>Once the client has answered the clarification questions, upload their filled-in
-       document here to resume automatic processing.</p>
-    <form action="/projects/{{ project.id }}/responses" method="post" enctype="multipart/form-data" class="upload-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div class="form-field">
-            <label for="responses_file">Filled-in clarification questions document</label>
-            <input type="file" id="responses_file" name="responses_file" accept=".docx" required>
-        </div>
-        <button type="submit" class="btn-primary">Upload &amp; Resume</button>
-    </form>
-</section>
+<div class="card" aria-labelledby="responses-heading">
+    <div class="card__head"><h2 id="responses-heading">Upload Client Responses</h2></div>
+    <div class="card__body">
+        <p>Once the client has answered the clarification questions, upload their filled-in
+           document here to resume automatic processing.</p>
+        <form action="/projects/{{ project.id }}/responses" method="post" enctype="multipart/form-data" class="upload-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="form-field">
+                <label for="responses_file">Filled-in clarification questions document</label>
+                <input type="file" id="responses_file" name="responses_file" accept=".docx" required>
+            </div>
+            <button type="submit" class="btn-primary">Upload &amp; Resume</button>
+        </form>
+    </div>
+</div>
 {% endif %}
 
 {% if requirements %}
-<section aria-labelledby="requirements-heading">
-    <h2 id="requirements-heading">Extracted Requirements</h2>
+<div class="card" aria-labelledby="requirements-heading">
+    <div class="card__head"><h2 id="requirements-heading">Extracted Requirements</h2></div>
     <table class="requirements-table">
         <caption class="visually-hidden">Extracted requirements with status</caption>
         <thead>
@@ -115,7 +159,7 @@
             <tr>
                 <td>{{ r.requirement }}</td>
                 <td>
-                    <span class="req-status req-status-{{ r.status | replace('_','-') }}">
+                    <span class="req-badge {{ r.status | replace('_','-') }}">
                         {% if r.status == "clear" %}✓ Clear
                         {% elif r.status == "ambiguous" %}⚠ Ambiguous
                         {% elif r.status == "assumption_needed" %}~ Assumption Made
@@ -132,20 +176,34 @@
             {% endfor %}
         </tbody>
     </table>
-</section>
+</div>
 {% endif %}
 
 {% if pricing %}
-<section aria-labelledby="pricing-heading">
-    <h2 id="pricing-heading">Effort &amp; Pricing Summary</h2>
-    <p class="pricing-total">Total: <strong>${{ "{:,.2f}".format(pricing.total) }}</strong>
-       ({{ pricing.total_hours }} hours, {{ pricing.contingency_pct }}% contingency)</p>
-</section>
+<div class="card" aria-labelledby="pricing-heading">
+    <div class="card__head"><h2 id="pricing-heading">Effort &amp; Pricing Summary</h2></div>
+    <div class="card__body">
+        <div class="stat-row">
+            <div class="stat">
+                <div class="stat__label">Total price</div>
+                <div class="stat__value">${{ "{:,.2f}".format(pricing.total) }}</div>
+            </div>
+            <div class="stat">
+                <div class="stat__label">Total hours</div>
+                <div class="stat__value">{{ pricing.total_hours }}</div>
+            </div>
+            <div class="stat">
+                <div class="stat__label">Contingency</div>
+                <div class="stat__value">{{ pricing.contingency_pct }}%</div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endif %}
 
 {% if compliance_matrix %}
-<section aria-labelledby="compliance-heading">
-    <h2 id="compliance-heading">Compliance Matrix</h2>
+<div class="card" aria-labelledby="compliance-heading">
+    <div class="card__head"><h2 id="compliance-heading">Compliance Matrix</h2></div>
     <table class="compliance-table">
         <caption class="visually-hidden">Compliance matrix covering every extracted requirement</caption>
         <thead>
@@ -165,11 +223,13 @@
             {% endfor %}
         </tbody>
     </table>
-    <p class="coverage-note">{{ compliance_matrix | length }} of {{ compliance_matrix | length }} requirements covered.</p>
-</section>
+    <div class="card__body" style="padding-top:12px;">
+        <p class="coverage-note" style="margin:0;">{{ compliance_matrix | length }} of {{ compliance_matrix | length }} requirements covered.</p>
+    </div>
+</div>
 {% endif %}
 
-<section aria-labelledby="danger-heading">
+<section aria-labelledby="danger-heading" style="margin-top:28px;">
     <h2 id="danger-heading" class="visually-hidden">Project actions</h2>
     <form action="/projects/{{ project.id }}/delete" method="post"
           onsubmit="return confirm('Delete this project? It can be restored within 30 days by an administrator.');">

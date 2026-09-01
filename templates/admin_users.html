@@ -1,75 +1,89 @@
 {% extends "base.html" %}
 {% block title %}Users — RFP Proposal Agent{% endblock %}
 {% block content %}
-<h1>Users</h1>
-<p>Every account can see and work every project (this is still a shared-access internal tool)
-   — the difference is that <strong>admin</strong> accounts can also manage users here.
-   Actions are attributed to the real account in the <a href="/audit">audit log</a>.</p>
+<div class="page-head">
+    <div>
+        <h1>Users</h1>
+        <p>Every account can see and work every project — the difference is that <strong>admin</strong> accounts
+           can also manage users here. Actions are attributed to the real account in the <a href="/audit">audit log</a>.</p>
+    </div>
+</div>
 
 {% if error %}
 <div class="alert alert-error" role="alert">{{ error }}</div>
 {% endif %}
 
-<table class="user-table">
-    <caption class="visually-hidden">Existing user accounts</caption>
-    <thead>
-        <tr>
-            <th scope="col">Username</th>
-            <th scope="col">Role</th>
-            <th scope="col">Status</th>
-            <th scope="col">Created</th>
-            <th scope="col">Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for u in users %}
-        <tr>
-            <td>{{ u.username }}</td>
-            <td>{{ u.role }}</td>
-            <td>{% if u.is_active %}<span class="status-badge status-submitted">Active</span>{% else %}<span class="status-badge status-analyzing">Deactivated</span>{% endif %}</td>
-            <td>{{ u.created_at[:10] }}</td>
-            <td>
-                {% if u.id != current_user.id %}
-                {% if u.is_active %}
-                <form action="/admin/users/{{ u.id }}/deactivate" method="post" class="inline-form">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="btn-danger btn-small">Deactivate</button>
-                </form>
-                {% else %}
-                <form action="/admin/users/{{ u.id }}/activate" method="post" class="inline-form">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="btn-primary btn-small">Reactivate</button>
-                </form>
-                {% endif %}
-                {% else %}
-                <span class="doc-meta">(you)</span>
-                {% endif %}
-            </td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+<div class="card">
+    <div class="card__head"><h2>Accounts</h2></div>
+    <table class="user-table">
+        <caption class="visually-hidden">Existing user accounts</caption>
+        <thead>
+            <tr>
+                <th scope="col">Username</th>
+                <th scope="col">Role</th>
+                <th scope="col">Status</th>
+                <th scope="col">Created</th>
+                <th scope="col">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for u in users %}
+            <tr>
+                <td>{{ u.username }}</td>
+                <td>{{ u.role }}</td>
+                <td>
+                    {% if u.is_active %}
+                    <span class="status-pill status-submitted">Active</span>
+                    {% else %}
+                    <span class="status-pill status-analyzing">Deactivated</span>
+                    {% endif %}
+                </td>
+                <td>{{ u.created_at[:10] }}</td>
+                <td>
+                    {% if u.id != current_user.id %}
+                        {% if u.is_active %}
+                        <form action="/admin/users/{{ u.id }}/deactivate" method="post" class="inline-form">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="btn-danger btn-small">Deactivate</button>
+                        </form>
+                        {% else %}
+                        <form action="/admin/users/{{ u.id }}/activate" method="post" class="inline-form">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="btn-primary btn-small">Reactivate</button>
+                        </form>
+                        {% endif %}
+                    {% else %}
+                    <span class="doc-meta">(you)</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
 
-<section aria-labelledby="new-user-heading">
-    <h2 id="new-user-heading">Add a user</h2>
-    <form action="/admin/users" method="post" class="upload-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div class="form-field">
-            <label for="username">Username</label>
-            <input type="text" id="username" name="username" required>
-        </div>
-        <div class="form-field">
-            <label for="password">Temporary password</label>
-            <input type="password" id="password" name="password" required minlength="8">
-        </div>
-        <div class="form-field">
-            <label for="role">Role</label>
-            <select id="role" name="role">
-                <option value="member">Member — full access to projects</option>
-                <option value="admin">Admin — full access, plus user management</option>
-            </select>
-        </div>
-        <button type="submit" class="btn-primary">Create user</button>
-    </form>
-</section>
+<div class="card">
+    <div class="card__head"><h2 id="new-user-heading">Add a user</h2></div>
+    <div class="card__body">
+        <form action="/admin/users" method="post" class="upload-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="form-field">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required>
+            </div>
+            <div class="form-field">
+                <label for="password">Temporary password</label>
+                <input type="password" id="password" name="password" required minlength="8">
+            </div>
+            <div class="form-field">
+                <label for="role">Role</label>
+                <select id="role" name="role">
+                    <option value="member">Member — full access to projects</option>
+                    <option value="admin">Admin — full access, plus user management</option>
+                </select>
+            </div>
+            <button type="submit" class="btn-primary">Create user</button>
+        </form>
+    </div>
+</div>
 {% endblock %}

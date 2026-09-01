@@ -1,42 +1,75 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}RFP Proposal Agent{% endblock %}</title>
-    <link rel="stylesheet" href="/static/style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}RFP Proposal Agent{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <a class="skip-link" href="#main-content">Skip to main content</a>
-    <header class="site-header">
-        <nav aria-label="Main navigation">
-            <a href="/" class="brand">RFP Proposal Agent</a>
-            {% if current_user %}
-            <a href="/new" class="nav-link">+ New Project</a>
-            <a href="/audit" class="nav-link">Audit Log</a>
-            {% if current_user.role == "admin" %}
-            <a href="/admin/users" class="nav-link">Admin &middot; Users</a>
-            {% endif %}
-            <span class="nav-spacer"></span>
-            <span class="nav-user">{{ current_user.username }} ({{ current_user.role }})</span>
-            <form action="/logout" method="post" class="inline-form">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="btn-link">Log out</button>
-            </form>
-            {% endif %}
-        </nav>
-    </header>
-    {% if demo_mode %}
-    <div class="demo-banner" role="status">
-        DEMO MODE — output for sample RFPs is canned demo data, not a real AI analysis. Set an
-        API key and turn DEMO_MODE off before using this on real client bid data.
+<a class="skip-link" href="#main-content">Skip to main content</a>
+{% if current_user %}
+<div class="shell">
+  <nav class="sidebar" aria-label="Main navigation">
+    <div class="sidebar__brand">
+      <div class="sidebar__mark" aria-hidden="true">RA</div>
+      <span class="sidebar__name">RFP Agent</span>
     </div>
+
+    <div class="sidebar__section-label">Overview</div>
+    <div class="sidebar__nav">
+      <a class="sidebar__link{% if request.url.path == '/' %} is-active{% endif %}" href="/">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        Projects
+      </a>
+      <a class="sidebar__link{% if request.url.path == '/audit' %} is-active{% endif %}" href="/audit">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/></svg>
+        Audit Log
+      </a>
+      {% if current_user.role == "admin" %}
+      <a class="sidebar__link{% if request.url.path == '/admin/users' %} is-active{% endif %}" href="/admin/users">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Admin &middot; Users
+      </a>
+      {% endif %}
+    </div>
+
+    <div class="sidebar__section-label">Actions</div>
+    <div class="sidebar__nav">
+      <a class="sidebar__link{% if request.url.path == '/new' %} is-active{% endif %}" href="/new">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New Project
+      </a>
+    </div>
+
+    <div class="sidebar__spacer"></div>
+
+    {% if demo_mode %}
+    <div class="sidebar__flag" role="status"><b>DEMO MODE</b> &mdash; canned output, not a real AI analysis.</div>
     {% endif %}
-    <main id="main-content">
-        {% block content %}{% endblock %}
-    </main>
-    <footer class="site-footer">
-        <p>Internal tool — access requires an account; ask an admin for one. See deployment README for setup.</p>
+    <div class="sidebar__flag">
+      <b>{{ current_user.username }}</b> &middot; {{ current_user.role }}<br>
+      <form action="/logout" method="post" class="inline-form" style="margin-top:6px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn-link">Log out</button>
+      </form>
+    </div>
+  </nav>
+
+  <div class="content" id="main-content">
+    {% block content %}{% endblock %}
+    <footer class="app-footer">
+      <p>Internal tool &mdash; access requires an account; ask an admin for one. See deployment README for setup.</p>
     </footer>
+  </div>
+</div>
+{% else %}
+<div class="auth-shell" id="main-content">
+  {% block auth_content %}{% endblock %}
+</div>
+{% endif %}
 </body>
 </html>

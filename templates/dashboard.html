@@ -1,43 +1,57 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — RFP Proposal Agent{% endblock %}
+{% block title %}Projects — RFP Proposal Agent{% endblock %}
 {% block content %}
-<h1>Projects</h1>
+<div class="page-head">
+    <div>
+        <h1>Projects</h1>
+        <p>Every bid invitation your team has uploaded, and where it stands in the pipeline.</p>
+    </div>
+    <a href="/new" class="btn-primary">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New Project
+    </a>
+</div>
 
+<div class="card">
 {% if projects %}
-<table class="project-table" role="table">
-    <caption class="visually-hidden">List of RFP proposal projects with status and dates</caption>
-    <thead>
-        <tr>
-            <th scope="col">Project</th>
-            <th scope="col">Agency</th>
-            <th scope="col">Status</th>
-            <th scope="col">Est. Value</th>
-            <th scope="col">Created</th>
-            <th scope="col">Updated</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for p in projects %}
-        <tr>
-            <td><a href="/projects/{{ p.id }}">{{ p.name }}</a></td>
-            <td>{{ p.agency or "—" }}</td>
-            <td>
-                <span class="status-badge status-{{ p.status | replace(' ', '-') | lower }}">
-                    <span class="status-dot" aria-hidden="true"></span>
-                    {{ p.status_label }}
-                </span>
-                {% if p.error_message %}
-                <span class="error-flag" title="{{ p.error_message }}">⚠ Error — see detail page</span>
-                {% endif %}
-            </td>
-            <td>{% if p.total_price %}${{ "{:,.0f}".format(p.total_price) }}{% else %}—{% endif %}</td>
-            <td>{{ p.created_at[:10] }}</td>
-            <td>{{ p.updated_at[:10] }}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+    <table class="project-table" role="table">
+        <caption class="visually-hidden">List of RFP proposal projects with status and dates</caption>
+        <thead>
+            <tr>
+                <th scope="col">Project</th>
+                <th scope="col">Agency</th>
+                <th scope="col">Status</th>
+                <th scope="col">Est. Value</th>
+                <th scope="col">Created</th>
+                <th scope="col">Updated</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in projects %}
+            <tr class="clickable-row">
+                <td><a href="/projects/{{ p.id }}">{{ p.name }}</a></td>
+                <td>{{ p.agency or "—" }}</td>
+                <td>
+                    <span class="status-pill status-{{ p.status | replace(' ', '-') | lower }}">
+                        {% if p.status == "Analyzing" %}<span class="pulse-dot" aria-hidden="true"></span>{% endif %}
+                        {{ p.status_label }}
+                    </span>
+                    {% if p.error_message %}
+                    <span class="error-flag" title="{{ p.error_message }}">⚠ Error — see detail page</span>
+                    {% endif %}
+                </td>
+                <td class="cell-value">{% if p.total_price %}${{ "{:,.0f}".format(p.total_price) }}{% else %}<span class="cell-muted">—</span>{% endif %}</td>
+                <td class="cell-muted">{{ p.created_at[:10] }}</td>
+                <td class="cell-muted">{{ p.updated_at[:10] }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
 {% else %}
-<p>No projects yet. <a href="/new">Upload your first bid invitation</a> to get started.</p>
+    <div class="empty-state">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+        <p>No projects yet. <a href="/new">Upload your first bid invitation</a> to get started.</p>
+    </div>
 {% endif %}
+</div>
 {% endblock %}

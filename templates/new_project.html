@@ -1,22 +1,48 @@
 {% extends "base.html" %}
 {% block title %}New Project — RFP Proposal Agent{% endblock %}
 {% block content %}
-<h1>New Project</h1>
-<p>Upload a bid invitation to start the automated review. The agent will extract requirements,
-   flag anything ambiguous, and either send you clarification questions to forward to the
-   client, or proceed straight to a full proposal draft.</p>
+<div class="page-head">
+    <div>
+        <h1>New Project</h1>
+        <p>Upload a bid invitation to start the automated review. The agent will extract requirements,
+           flag anything ambiguous, and either send you clarification questions to forward to the
+           client, or proceed straight to a full proposal draft.</p>
+    </div>
+</div>
 
-<form action="/projects" method="post" enctype="multipart/form-data" class="upload-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="form-field">
-        <label for="project_name">Project name</label>
-        <input type="text" id="project_name" name="project_name" required
-               placeholder="e.g. City of Lakeview — Service Portal Modernization">
+<div class="card">
+    <div class="card__body">
+        <form action="/projects" method="post" enctype="multipart/form-data" class="upload-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="form-field">
+                <label for="project_name">Project name</label>
+                <input type="text" id="project_name" name="project_name" required
+                       placeholder="e.g. City of Lakeview — Service Portal Modernization">
+            </div>
+            <div class="form-field">
+                <label for="bid_file">Bid invitation file</label>
+                <div class="dropzone" id="dropzone">
+                    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <div class="dropzone__label">Click to choose a file, or drag one here</div>
+                    <div class="dropzone__sub">PDF, Word (.docx), or plain text — up to 25 MB</div>
+                    <input type="file" id="bid_file" name="bid_file" accept=".pdf,.docx,.txt" required>
+                </div>
+                <div class="dropzone__filename" id="dropzone-filename"></div>
+            </div>
+            <button type="submit" class="btn-primary">Start Review</button>
+        </form>
     </div>
-    <div class="form-field">
-        <label for="bid_file">Bid invitation file (PDF, Word, or text — up to 25 MB)</label>
-        <input type="file" id="bid_file" name="bid_file" accept=".pdf,.docx,.txt" required>
-    </div>
-    <button type="submit" class="btn-primary">Start Review</button>
-</form>
+</div>
+
+<script>
+(function () {
+  var input = document.getElementById('bid_file');
+  var out = document.getElementById('dropzone-filename');
+  if (input && out) {
+    input.addEventListener('change', function () {
+      out.textContent = input.files && input.files[0] ? input.files[0].name : '';
+    });
+  }
+})();
+</script>
 {% endblock %}
