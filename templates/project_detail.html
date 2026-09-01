@@ -10,34 +10,99 @@
         <p class="agency-line">{{ project.agency or "Agency not yet identified" }}</p>
     </div>
     <span class="status-pill status-{{ project.status | replace(' ', '-') | lower }}">
-        {{ status_icon(project.status) }}
+        {{ status_icon(project.status, project.error_message) }}
         {{ project.status_label }}
     </span>
 </div>
 
 <div class="card">
     {% set steps = ["Analyzing", "Clarifications Sent", "Responses Pending", "Ready to Generate", "Submitted"] %}
+    {% set display_status = "Submitted" if project.status == "Declined" else project.status %}
     {% set ns = namespace(current_index=-1) %}
-    {% for s in steps %}{% if s == project.status %}{% set ns.current_index = loop.index0 %}{% endif %}{% endfor %}
+    {% for s in steps %}{% if s == display_status %}{% set ns.current_index = loop.index0 %}{% endif %}{% endfor %}
     <div class="stepper">
         {% for s in steps %}
-        <div class="step {% if ns.current_index >= 0 and loop.index0 < ns.current_index %}is-done{% elif loop.index0 == ns.current_index %}is-current{% endif %}">
+        {% set is_declined_step = project.status == "Declined" and loop.index0 == 4 %}
+        <div class="step {% if is_declined_step %}is-declined{% elif ns.current_index >= 0 and loop.index0 < ns.current_index %}is-done{% elif loop.index0 == ns.current_index %}is-current{% endif %}">
             <div class="step__line"></div>
-            <div class="step__dot">{% if ns.current_index >= 0 and loop.index0 < ns.current_index %}✓{% else %}{{ loop.index }}{% endif %}</div>
-            <div class="step__label">{{ s }}</div>
+            <div class="step__dot">
+                {%- if is_declined_step %}✕
+                {%- elif ns.current_index >= 0 and loop.index0 < ns.current_index %}✓
+                {%- else %}{{ loop.index }}
+                {%- endif %}
+            </div>
+            <div class="step__label">{{ "Declined" if is_declined_step else s }}</div>
         </div>
         {% endfor %}
     </div>
-    <div class="card__body" style="padding-top:0; display:flex; align-items:center; gap:10px;">
-        <form action="/projects/{{ project.id }}/status" method="post" class="inline-form" style="display:flex; align-items:center; gap:10px;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <label for="status-select" style="font-size:.82rem; font-weight:600; color:var(--ink-soft); margin:0;">Update status</label>
-            <select id="status-select" name="status" onchange="this.form.submit()" style="max-width:240px;">
-                {% for s in steps %}
-                <option value="{{ s }}" {% if s == project.status %}selected{% endif %}>{{ s }}</option>
-                {% endfor %}
-            </select>
-        </form>
+
+    <div class="card__body status-panel" style="padding-top:0; border-top:1px solid var(--border); margin-top:4px;">
+        {% if project.error_message %}
+        <span class="status-panel__icon status-panel__icon--stopped" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        </span>
+        <div>
+            <div class="status-panel__title" style="color:var(--danger);">Stopped — processing hit an error</div>
+            <div class="status-panel__text">Automatic processing has halted and needs attention before it can continue. See the error below.</div>
+        </div>
+
+        {% elif project.status in ("Analyzing", "Responses Pending") %}
+        <span class="status-panel__icon status-panel__icon--busy spin" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9"/></svg>
+        </span>
+        <div>
+            <div class="status-panel__title">In progress</div>
+            <div class="status-panel__text">
+                {% if project.status == "Analyzing" %}The bid invitation is being read and every requirement extracted right now.{% else %}The client's responses are being applied and the proposal is being assembled right now.{% endif %}
+                This page updates automatically — refresh any time to check.
+            </div>
+        </div>
+
+        {% elif project.status == "Clarifications Sent" %}
+        <span class="status-panel__icon status-panel__icon--waiting" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </span>
+        <div>
+            <div class="status-panel__title">Paused — waiting on the client</div>
+            <div class="status-panel__text">Clarification questions have been sent. Upload their filled-in answers below to resume automatically.</div>
+        </div>
+
+        {% elif project.status == "Ready to Generate" %}
+        <span class="status-panel__icon status-panel__icon--decision" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        </span>
+        <div style="flex:1;">
+            <div class="status-panel__title">Ready for your decision</div>
+            <div class="status-panel__text">Pricing and the compliance matrix are ready below. Review the Go/No-Go read, then approve to submit or reject to decline this bid.</div>
+            <div class="decision-actions">
+                <form action="/projects/{{ project.id }}/approve" method="post" class="inline-form"
+                      onsubmit="return confirm('Mark this project Submitted?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn-primary btn-approve">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                        Approve &amp; Mark Submitted
+                    </button>
+                </form>
+                <form action="/projects/{{ project.id }}/reject" method="post" class="inline-form"
+                      onsubmit="return confirm('Reject this project? It will be marked Declined and cannot be submitted afterward.');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn-danger">Reject</button>
+                </form>
+            </div>
+        </div>
+
+        {% elif project.status == "Submitted" %}
+        <span class="status-panel__icon status-panel__icon--done" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        </span>
+        <div class="status-panel__title">Submitted — no further action needed.</div>
+
+        {% elif project.status == "Declined" %}
+        <span class="status-panel__icon status-panel__icon--stopped" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        </span>
+        <div class="status-panel__title" style="color:var(--danger);">Declined — this project was not pursued.</div>
+        {% endif %}
     </div>
 </div>
 
@@ -45,10 +110,6 @@
 <div class="alert alert-error" role="alert" style="margin-top:20px;">
     <div><strong>Something went wrong during processing:</strong><pre>{{ project.error_message }}</pre></div>
 </div>
-{% endif %}
-
-{% if project.status == "Analyzing" and not project.error_message %}
-<div class="alert alert-info" role="status" style="margin-top:20px;">Processing — this page will show results once analysis completes. Refresh to check progress.</div>
 {% endif %}
 
 {% if capability_fit %}

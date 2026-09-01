@@ -1,13 +1,20 @@
 {# Shared status-pill icon so every list (dashboard, home, project detail) renders the same
-   icon for the same status instead of each template inventing its own. #}
-{% macro status_icon(status) %}
-{%- if status == "Analyzing" -%}
+   icon for the same status instead of each template inventing its own. `has_error` lets a
+   caller distinguish "actively processing" from "stopped on an error" for the two statuses
+   that cover a background job (Analyzing, Responses Pending) — both look identical in the
+   status column otherwise, which is exactly the ambiguity this exists to remove. #}
+{% macro status_icon(status, has_error=False) %}
+{%- if has_error and status in ("Analyzing", "Responses Pending") -%}
+<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+{%- elif status in ("Analyzing", "Responses Pending") -%}
 <span class="pulse-dot" aria-hidden="true"></span>
-{%- elif status in ("Clarifications Sent", "Responses Pending") -%}
+{%- elif status == "Clarifications Sent" -%}
 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
 {%- elif status == "Ready to Generate" -%}
-<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
 {%- elif status == "Submitted" -%}
 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+{%- elif status == "Declined" -%}
+<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
 {%- endif -%}
 {% endmacro %}

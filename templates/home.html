@@ -65,7 +65,7 @@
                     <td><a href="/projects/{{ p.id }}">{{ p.name }}</a></td>
                     <td>
                         <span class="status-pill status-{{ p.status | replace(' ', '-') | lower }}">
-                            {{ status_icon(p.status) }}
+                            {{ status_icon(p.status, p.error_message) }}
                             {{ p.status_label }}
                         </span>
                     </td>
