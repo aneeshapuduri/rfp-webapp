@@ -10,7 +10,8 @@ on a shared dashboard, behind per-user login.
 
 - `main.py` — FastAPI app, all routes (now behind login — see Accounts & login below)
 - `auth.py` — password hashing, sessions, the login-required middleware, and CSRF checks
-- `db.py` — SQLite data layer (projects, documents, users, audit log)
+- `db.py` — Postgres data layer (projects, documents, users, audit log) — targets Supabase's
+  managed Postgres by default, but works against any Postgres instance via `DATABASE_URL`
 - `storage.py` — file storage: safe on-disk filenames, size/type validation, and optional
   encryption at rest with a per-document flag (see Security fixes below)
 - `pipeline_runner.py` — wires the Phase 1-4 pipeline (+ the Go/No-Go check) into background jobs
@@ -29,6 +30,35 @@ pip install -r requirements.txt
 
 Dependencies are pinned to exact versions that were installed and tested together — see the
 comment at the top of `requirements.txt` before bumping any of them.
+
+### Database (Supabase)
+
+Projects, documents (metadata only — see "Where data is stored" below for the actual files),
+users, and the audit log live in Postgres. The app is written against plain Postgres, but is
+meant to point at [Supabase](https://supabase.com)'s managed Postgres, since that gets you
+automated backups and a web dashboard to browse/query data for free, without running your own
+database server.
+
+1. Create a Supabase project (the free tier is enough for this app).
+2. In the Supabase dashboard: **Settings → Database → Connection string** — copy the URI. It
+   looks like `postgresql://postgres.xxxx:[YOUR-PASSWORD]@aws-0-xxxx.pooler.supabase.com:5432/postgres`
+   (Supabase fills in the password placeholder for you once you paste in the one you set when
+   creating the project). Prefer the **connection pooler** string (port 6543, "Transaction"
+   mode) over the direct connection if your host environment recycles connections frequently —
+   either works, since this app opens a small connection pool of its own either way.
+3. Set it as an environment variable:
+
+```bash
+export DATABASE_URL="postgresql://postgres.xxxx:your-password@aws-0-xxxx.pooler.supabase.com:5432/postgres"
+```
+
+`SUPABASE_DB_URL` is also accepted as an alias, if you'd rather name it that in your secrets
+manager. The app will not start without one of these set — there's no SQLite fallback.
+
+The schema (tables and columns) is created and kept up to date automatically on startup via
+`db.init_db()` — there's no separate migration command to run, on first setup or after future
+schema changes shipped in an update. You can also open the Supabase dashboard's **Table
+Editor** at any time to browse `projects`, `documents`, `users`, and `audit_log` directly.
 
 ### Accounts & login
 
@@ -105,9 +135,14 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 ### Where data is stored (`DATA_DIR`)
 
-Everything the app writes — the SQLite database, uploaded documents, generated proposals —
-lives under a `data/` folder next to the app by default. On a VPS or your own server, that
-folder sits on the same disk as the app and just persists normally.
+Projects, users, and the audit log live in Supabase (see "Database (Supabase)" above) — that
+part isn't affected by `DATA_DIR` or by redeploys/restarts wiping the app's own filesystem,
+since it's a separate managed service.
+
+Uploaded bid invitations and generated proposals (the actual file bytes, not their database
+records) are still written to local disk, under a `data/` folder next to the app by default. On
+a VPS or your own server, that folder sits on the same disk as the app and just persists
+normally.
 
 On a platform where the app's own filesystem is wiped on every deploy or restart (Render,
 Heroku, most container platforms), set `DATA_DIR` to a path on a **persistent/mounted disk**
@@ -117,18 +152,22 @@ instead:
 export DATA_DIR=/var/data   # or wherever your platform mounts a persistent volume
 ```
 
-If you skip this on such a platform, the app will still run — right up until the next deploy
-or restart wipes every user account, project, and document with no warning. See "Deploying to
-Render" below for the concrete version of this.
+If you skip this on such a platform, the app will still run — right up until the next deploy or
+restart wipes every uploaded/generated document with no warning (your accounts, projects, and
+audit history are safe either way, since those live in Supabase now). See "Deploying to Render"
+below for the concrete version of this.
 
 ## Deploying to Render
 
 A `render.yaml` blueprint is included. In the Render dashboard: **New +** → **Blueprint** →
 point it at the git repo containing this app. Render reads `render.yaml` and creates the
-service, a 1 GB persistent disk mounted at `/var/data`, and prompts you for the secret
-environment variables it marked `sync: false` (`ADMIN_USERNAME`, `ADMIN_PASSWORD`,
-`ENCRYPTION_KEY`, `ANTHROPIC_API_KEY`/`GEMINI_API_KEY`). `SESSION_SECRET` is auto-generated for
-you; `DATA_DIR` is already set to the mounted disk path; `DEMO_MODE` is set to `false`.
+service and a 1 GB persistent disk mounted at `/var/data` (for uploaded/generated documents —
+see "Where data is stored" above), and prompts you for the secret environment variables it
+marked `sync: false` (`DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_KEY`,
+`ANTHROPIC_API_KEY`/`GEMINI_API_KEY`). Set `DATABASE_URL` to your Supabase connection string
+(see "Database (Supabase)" above) — don't skip this one, the app won't start without it.
+`SESSION_SECRET` is auto-generated for you; `DATA_DIR` is already set to the mounted disk path;
+`DEMO_MODE` is set to `false`.
 
 If you'd rather click through it by hand instead of using the blueprint, create a **Web
 Service** with:
@@ -138,22 +177,25 @@ Service** with:
 - **Start command**: `uvicorn main:app --host 0.0.0.0 --port $PORT` (Render assigns `$PORT` —
   don't hardcode 8000)
 - **Instance type**: anything above the free plan — a persistent disk requires a paid plan
-- **Disk**: add one, e.g. 1 GB, mounted at `/var/data`
-- **Environment variables**: `DATA_DIR=/var/data`, `SESSION_SECRET` (a long random string),
-  `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_KEY`, and `ANTHROPIC_API_KEY` or
-  `GEMINI_API_KEY`. Leave `DEMO_MODE` unset.
+- **Disk**: add one, e.g. 1 GB, mounted at `/var/data` (for documents — not needed for the
+  database itself, since that's in Supabase)
+- **Environment variables**: `DATABASE_URL` (your Supabase connection string), `DATA_DIR=/var/data`,
+  `SESSION_SECRET` (a long random string), `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_KEY`,
+  and `ANTHROPIC_API_KEY` or `GEMINI_API_KEY`. Leave `DEMO_MODE` unset.
 
 **The one thing that will bite you if skipped**: Render's default filesystem is ephemeral — it
 resets on every deploy. Without the persistent disk (and `DATA_DIR` pointed at it), the app
-still deploys and looks like it works, but every account, project, and uploaded document
-disappears the next time you push a change. If you're re-deploying an existing Render service
-that was already running this app *without* a disk, your existing data on that service was
-already living on borrowed time — add the disk before your next deploy, not after.
+still deploys and looks like it works, but every uploaded/generated document disappears the
+next time you push a change (accounts and projects are safe regardless, since those live in
+Supabase). If you're re-deploying an existing Render service that was already running this app
+*without* a disk, your existing documents on that service were already living on borrowed
+time — add the disk before your next deploy, not after.
 
 **Redeploying after a code update** (like this round of fixes): commit the new code, push to
 the branch Render is watching, and it redeploys automatically (or click **Manual Deploy** in
-the dashboard). The persistent disk is untouched by a redeploy — your users, projects, and
-documents carry over. Database schema changes in this update (new `users` table, a couple of
+the dashboard). The persistent disk is untouched by a redeploy — your uploaded/generated
+documents carry over, and your Supabase database is entirely unaffected by app redeploys since
+it's a separate service. Database schema changes in this update (new `users` table, a couple of
 new columns on `projects`/`documents`) are applied automatically via `db.init_db()`'s
 migrations on startup — no manual migration step needed.
 
@@ -174,9 +216,11 @@ migrations on startup — no manual migration step needed.
    later is safe: existing documents are tracked per-document as encrypted or not, so old
    plaintext files keep reading correctly instead of crashing.
 5. **Confirm `DEMO_MODE` is unset (or `false`)** — see above.
-6. **Back up `data/app.db` and `data/generated/` / `data/uploads/`** per your normal backup
-   policy — this is a single SQLite file plus a folder of documents, so standard file/DB
-   backup tooling applies.
+6. **Database backups**: Supabase takes automated daily backups on paid plans (check your
+   project's plan and backup retention under Settings → Database → Backups) — confirm this
+   matches your organization's backup policy before relying on it for real client data. Also
+   back up `data/generated/` / `data/uploads/` (the actual document files, which live outside
+   Supabase — see "Where data is stored" above) per your normal file backup policy.
 7. **Company profile**: `config/company_profile.json` still has placeholder company data.
    Replace it with your real company info before generating proposals you intend to submit —
    this also feeds the Go/No-Go capability check, so keep `core_capabilities` accurate.

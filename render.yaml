@@ -5,13 +5,20 @@
 # plain "Web Service" by hand in the dashboard and copy these same settings in — this file is
 # a convenience, not a requirement.
 #
-# IMPORTANT — persistent disk: this app stores everything (the SQLite database, uploaded
-# documents, generated proposals) as local files. Render's default web service filesystem is
-# EPHEMERAL — it is wiped on every deploy and every restart. The `disk:` block below attaches a
-# persistent disk and DATA_DIR points the app at it, so data survives deploys. Persistent disks
-# require a paid instance type — they are NOT available on Render's free plan. If you deploy
-# this on the free plan without a disk, every redeploy (including Render's automatic nightly
-# restarts on some plans) silently wipes all projects, users, and documents. Plan accordingly.
+# DATABASE: projects, users, and the audit log now live in Postgres on Supabase instead of a
+# local SQLite file — set DATABASE_URL below to your Supabase project's connection string
+# (Supabase dashboard -> Settings -> Database -> Connection string). That's what makes the app
+# safe to run without a persistent disk from the database's point of view: Supabase handles
+# backups and survives redeploys on its own.
+#
+# FILES: uploaded bid invitations and generated proposals are still written to local disk (see
+# storage.py / DATA_DIR) — that part did not move. Render's default web service filesystem is
+# EPHEMERAL — it is wiped on every deploy and every restart — so the `disk:` block below still
+# attaches a persistent disk for those files. Persistent disks require a paid instance type;
+# they are NOT available on Render's free plan. If you deploy this on the free plan without the
+# disk, every redeploy silently wipes uploaded/generated documents (the database itself is fine
+# either way, since it now lives in Supabase). If you'd rather not pay for a disk at all, moving
+# document storage to Supabase's Storage buckets is a separate follow-up — ask for it if wanted.
 services:
   - type: web
     name: rfp-proposal-agent
@@ -21,6 +28,8 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /login
     envVars:
+      - key: DATABASE_URL
+        sync: false               # set in the Render dashboard — Supabase's Postgres connection string (contains a password, never commit it to git)
       - key: DATA_DIR
         value: /var/data
       - key: SESSION_SECRET

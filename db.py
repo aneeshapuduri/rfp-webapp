@@ -1,23 +1,44 @@
 """
-SQLite data layer. Deliberately plain sqlite3 (no ORM) to keep the deployment footprint
-small — one file, no extra service to run. Swap for Postgres later without touching callers
-much, since all access goes through these functions.
+Postgres data layer (targets Supabase's managed Postgres, but works against any Postgres
+instance — Supabase is just a connection string). Deliberately plain psycopg2 (no ORM); all
+access goes through these functions so callers never see SQL or connection details.
+
+Originally this module was plain sqlite3 against a single local file. That worked for a
+single-instance deployment but meant the database lived on Render's local disk: no automated
+backups, no dashboard to inspect data, and no safe way to run more than one app instance. This
+version moves the same schema to Postgres so the database lives in Supabase instead — see
+README for how to create a Supabase project and set DATABASE_URL.
+
+Connection handling: a small pool (psycopg2.pool.ThreadedConnectionPool) is kept open for the
+life of the process, since opening a fresh TCP+TLS connection to a remote Postgres host on
+every call (the way the old sqlite3 code opened/closed a local file handle per call) would add
+real latency. get_conn() borrows a connection from the pool and returns a thin wrapper whose
+.execute()/.commit()/.close() match the old sqlite3.Connection interface, so every calling
+function below is unchanged from the sqlite version except for the "?" -> "%s" placeholder
+style. .close() returns the connection to the pool rather than actually closing the socket.
 """
 from __future__ import annotations
 
 import datetime
 import json
 import os
-import pathlib
-import sqlite3
 import uuid
 
-# DATA_DIR is configurable so a deployment on a platform with an ephemeral filesystem (Render,
-# Heroku, most container platforms) can point this at a mounted persistent disk instead of the
-# app's own directory, which gets wiped on every redeploy. Defaults to the old behavior
-# (a 'data' folder next to the app) for local/VPS use where the app directory itself persists.
-DATA_DIR = pathlib.Path(os.environ.get("DATA_DIR") or (pathlib.Path(__file__).resolve().parent / "data"))
-DB_PATH = DATA_DIR / "app.db"
+import psycopg2
+import psycopg2.extras
+import psycopg2.pool
+
+# Supabase's project settings page (Settings -> Database -> Connection string) gives you this
+# URL directly — it already includes sslmode=require. Also accepts the plain Postgres-standard
+# name (DATABASE_URL) so this isn't Supabase-specific if you ever point it elsewhere.
+DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL (or SUPABASE_DB_URL) is not set. Create a Supabase project, copy its "
+        "Postgres connection string from Settings -> Database -> Connection string, and set it "
+        "as an environment variable. See README for the full setup steps."
+    )
 
 VALID_STATUSES = [
     "Analyzing",
@@ -78,36 +99,90 @@ CREATE TABLE IF NOT EXISTS users (
 );
 """
 
-# Columns added after the initial release — applied with ALTER TABLE for databases created
-# before this column existed, so upgrading in place never breaks on a missing column.
+# Columns added after the initial release — applied for databases created before this column
+# existed, so upgrading in place never breaks on a missing column.
 _MIGRATIONS = [
     ("projects", "capability_fit_json", "TEXT"),
     ("projects", "created_by", "TEXT"),
     ("documents", "encrypted", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
-
-def get_conn() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+_pool: psycopg2.pool.ThreadedConnectionPool | None = None
 
 
-def _apply_migrations(conn: sqlite3.Connection):
+def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    global _pool
+    if _pool is None:
+        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, dsn=DATABASE_URL)
+    return _pool
+
+
+class _Conn:
+    """Wraps a pooled psycopg2 connection so calling code can keep using the same
+    conn.execute(sql, params).fetchone()/.fetchall() / conn.commit() / conn.close() shape it
+    used against sqlite3.Connection. Rows come back as RealDictRow (dict-like — row["col"] and
+    dict(row) both work, matching how sqlite3.Row was used everywhere below)."""
+
+    def __init__(self, raw):
+        self._raw = raw
+
+    def execute(self, sql: str, params=()):
+        cur = self._raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Every query in this module was written with sqlite's "?" placeholder style; none of
+        # them contain a literal "?" character anywhere else, so this blanket swap to
+        # psycopg2's "%s" style is safe and avoids rewriting every call site individually.
+        cur.execute(sql.replace("?", "%s"), params)
+        return cur
+
+    def executescript(self, script: str):
+        cur = self._raw.cursor()
+        cur.execute(script)
+        cur.close()
+
+    def commit(self):
+        self._raw.commit()
+
+    def rollback(self):
+        self._raw.rollback()
+
+    def close(self):
+        """Returns the connection to the pool rather than closing the socket — matches the
+        call sites below, which all call conn.close() once they're done with a request."""
+        try:
+            _get_pool().putconn(self._raw)
+        except Exception:
+            pass
+
+
+def get_conn() -> _Conn:
+    raw = _get_pool().getconn()
+    return _Conn(raw)
+
+
+def _apply_migrations(conn: _Conn):
     for table, column, coltype in _MIGRATIONS:
-        cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        cols = {
+            row["column_name"]
+            for row in conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+                (table,),
+            ).fetchall()
+        }
         if column not in cols:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
 
 def init_db():
     conn = get_conn()
-    conn.executescript(SCHEMA)
-    _apply_migrations(conn)
-    conn.commit()
-    conn.close()
+    try:
+        conn.executescript(SCHEMA)
+        _apply_migrations(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def now() -> str:

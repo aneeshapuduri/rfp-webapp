@@ -9,6 +9,7 @@ itsdangerous==2.2.0
 python-multipart==0.0.32
 Jinja2==3.1.6
 cryptography==50.0.1
+psycopg2-binary==2.9.12
 anthropic==1.2.0
 google-genai==2.20.0
 python-docx==1.2.0
