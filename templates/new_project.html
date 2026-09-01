@@ -7,13 +7,14 @@
    client, or proceed straight to a full proposal draft.</p>
 
 <form action="/projects" method="post" enctype="multipart/form-data" class="upload-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-field">
         <label for="project_name">Project name</label>
         <input type="text" id="project_name" name="project_name" required
                placeholder="e.g. City of Lakeview — Service Portal Modernization">
     </div>
     <div class="form-field">
-        <label for="bid_file">Bid invitation file (PDF, Word, or text)</label>
+        <label for="bid_file">Bid invitation file (PDF, Word, or text — up to 25 MB)</label>
         <input type="file" id="bid_file" name="bid_file" accept=".pdf,.docx,.txt" required>
     </div>
     <button type="submit" class="btn-primary">Start Review</button>

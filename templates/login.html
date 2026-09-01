@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Sign in — RFP Proposal Agent{% endblock %}
+{% block content %}
+<div class="login-card">
+    <h1>Sign in</h1>
+    <p>RFP Proposal Agent is an internal tool — sign in with the account an admin created for you.</p>
+
+    {% if error %}
+    <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form action="/login" method="post" class="upload-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="next" value="{{ next }}">
+        <div class="form-field">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" required autocomplete="username" autofocus>
+        </div>
+        <div class="form-field">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn-primary">Sign in</button>
+    </form>
+</div>
+{% endblock %}

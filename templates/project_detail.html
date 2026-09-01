@@ -12,6 +12,7 @@
     </span>
 
     <form action="/projects/{{ project.id }}/status" method="post" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label for="status-select" class="visually-hidden">Change status</label>
         <select id="status-select" name="status" onchange="this.form.submit()">
             {% for s in ["Analyzing", "Clarifications Sent", "Responses Pending", "Ready to Generate", "Submitted"] %}
@@ -30,6 +31,39 @@
 
 {% if project.status == "Analyzing" and not project.error_message %}
 <div class="alert alert-info" role="status">Processing — this page will show results once analysis completes. Refresh to check progress.</div>
+{% endif %}
+
+{% if capability_fit %}
+<section aria-labelledby="gate-heading">
+    <h2 id="gate-heading">Go / No-Go Decision</h2>
+    <p class="gate-recommendation gate-{{ capability_fit.overall | replace(', ', '-') | replace(' ', '-') | lower }}">
+        {{ capability_fit.overall }}
+    </p>
+    <p>{{ capability_fit.reasoning }}</p>
+
+    {% if capability_fit.matched_capabilities %}
+    <p class="capability-label">Matched against our stated capabilities:</p>
+    <ul class="capability-chips">
+        {% for c in capability_fit.matched_capabilities %}
+        <li class="cap-chip cap-chip-matched">✓ {{ c }}</li>
+        {% endfor %}
+        {% for c in capability_fit.unmatched_capabilities %}
+        <li class="cap-chip">{{ c }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% if capability_fit.gaps %}
+    <p class="capability-label">Requirements with no matching capability ({{ capability_fit.gaps | length }}):</p>
+    <ul class="fit-gap-list">
+        {% for g in capability_fit.gaps %}
+        <li>{{ g.requirement }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    <p class="coverage-note">This is a deterministic keyword-based fit check against config/company_profile.json,
+       meant as a fast first read for the bid team — not a substitute for a human bid/no-bid call.</p>
+</section>
 {% endif %}
 
 <section aria-labelledby="documents-heading">
@@ -54,6 +88,7 @@
     <p>Once the client has answered the clarification questions, upload their filled-in
        document here to resume automatic processing.</p>
     <form action="/projects/{{ project.id }}/responses" method="post" enctype="multipart/form-data" class="upload-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-field">
             <label for="responses_file">Filled-in clarification questions document</label>
             <input type="file" id="responses_file" name="responses_file" accept=".docx" required>
@@ -138,6 +173,7 @@
     <h2 id="danger-heading" class="visually-hidden">Project actions</h2>
     <form action="/projects/{{ project.id }}/delete" method="post"
           onsubmit="return confirm('Delete this project? It can be restored within 30 days by an administrator.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn-danger">Delete Project</button>
     </form>
 </section>

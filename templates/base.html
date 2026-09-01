@@ -11,15 +11,32 @@
     <header class="site-header">
         <nav aria-label="Main navigation">
             <a href="/" class="brand">RFP Proposal Agent</a>
+            {% if current_user %}
             <a href="/new" class="nav-link">+ New Project</a>
             <a href="/audit" class="nav-link">Audit Log</a>
+            {% if current_user.role == "admin" %}
+            <a href="/admin/users" class="nav-link">Admin &middot; Users</a>
+            {% endif %}
+            <span class="nav-spacer"></span>
+            <span class="nav-user">{{ current_user.username }} ({{ current_user.role }})</span>
+            <form action="/logout" method="post" class="inline-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="btn-link">Log out</button>
+            </form>
+            {% endif %}
         </nav>
     </header>
+    {% if demo_mode %}
+    <div class="demo-banner" role="status">
+        DEMO MODE — output for sample RFPs is canned demo data, not a real AI analysis. Set an
+        API key and turn DEMO_MODE off before using this on real client bid data.
+    </div>
+    {% endif %}
     <main id="main-content">
         {% block content %}{% endblock %}
     </main>
     <footer class="site-footer">
-        <p>Internal tool — shared access, no login. See deployment README before exposing beyond your internal network.</p>
+        <p>Internal tool — access requires an account; ask an admin for one. See deployment README for setup.</p>
     </footer>
 </body>
 </html>
