@@ -191,3 +191,74 @@ th {
 .inline-form { display: inline-block; }
 
 code { background: var(--light-bg); padding: 2px 6px; border-radius: 3px; font-size: 0.85rem; }
+
+/* ---------- Auth / nav additions ---------- */
+.nav-spacer { flex: 1; }
+.nav-user { color: #dce6f1; font-size: 0.9rem; }
+.btn-link {
+    background: none; border: none; color: #dce6f1; text-decoration: underline;
+    font-size: 0.9rem; cursor: pointer; padding: 0;
+}
+.btn-link:hover { color: #fff; }
+.btn-small { padding: 5px 12px; font-size: 0.85rem; margin-top: 0; }
+
+.demo-banner {
+    background: #fdf0de;
+    color: #7a4500;
+    border-bottom: 1px solid #e8c383;
+    text-align: center;
+    padding: 8px 16px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.login-card {
+    max-width: 380px;
+    margin: 40px auto 0;
+    padding: 28px 32px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--light-bg);
+}
+.login-card h1 { margin-top: 0; }
+
+.user-table td, .user-table th { vertical-align: middle; }
+
+/* ---------- Go / No-Go panel ---------- */
+.gate-recommendation {
+    display: inline-block;
+    font-weight: 700;
+    font-size: 1.05rem;
+    padding: 4px 14px;
+    border-radius: 14px;
+    border: 1px solid currentColor;
+}
+.gate-go { color: var(--green); }
+.gate-go-with-gaps { color: var(--orange); }
+.gate-no-go { color: var(--red); }
+
+.capability-label { font-weight: 600; margin-bottom: 4px; }
+.capability-chips {
+    list-style: none;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0 0 16px;
+}
+.cap-chip {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 4px 12px;
+    font-size: 0.85rem;
+    color: var(--gray);
+    background: #fff;
+}
+.cap-chip-matched {
+    border-color: var(--green);
+    color: var(--green);
+    font-weight: 600;
+    background: #eaf6ed;
+}
+.fit-gap-list { margin: 0 0 8px; padding-left: 20px; }
+.fit-gap-list li { margin-bottom: 4px; }
