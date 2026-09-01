@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import status_icon %}
 {% block title %}{{ project.name }} — RFP Proposal Agent{% endblock %}
 {% block content %}
 <a href="/" class="back-link">&larr; Back to all projects</a>
@@ -9,7 +10,7 @@
         <p class="agency-line">{{ project.agency or "Agency not yet identified" }}</p>
     </div>
     <span class="status-pill status-{{ project.status | replace(' ', '-') | lower }}">
-        {% if project.status == "Analyzing" %}<span class="pulse-dot" aria-hidden="true"></span>{% endif %}
+        {{ status_icon(project.status) }}
         {{ project.status_label }}
     </span>
 </div>
@@ -27,10 +28,10 @@
         </div>
         {% endfor %}
     </div>
-    <div class="card__body" style="padding-top:0;">
-        <form action="/projects/{{ project.id }}/status" method="post" class="inline-form">
+    <div class="card__body" style="padding-top:0; display:flex; align-items:center; gap:10px;">
+        <form action="/projects/{{ project.id }}/status" method="post" class="inline-form" style="display:flex; align-items:center; gap:10px;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <label for="status-select" class="visually-hidden">Change status</label>
+            <label for="status-select" style="font-size:.82rem; font-weight:600; color:var(--ink-soft); margin:0;">Update status</label>
             <select id="status-select" name="status" onchange="this.form.submit()" style="max-width:240px;">
                 {% for s in steps %}
                 <option value="{{ s }}" {% if s == project.status %}selected{% endif %}>{{ s }}</option>
@@ -52,7 +53,7 @@
 
 {% if capability_fit %}
 <div class="card" aria-labelledby="gate-heading">
-    <div class="card__head"><h2 id="gate-heading">Go / No-Go Decision</h2></div>
+    <div class="card__head"><h2 id="gate-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> Go / No-Go Decision</h2></div>
     <div class="card__body">
         {% set rec_class = "rec-go" if capability_fit.overall == "Go" else ("rec-no-go" if capability_fit.overall == "No-Go" else "rec-go-with-gaps") %}
         <div class="recommendation-banner {{ rec_class }}">
@@ -104,7 +105,7 @@
 {% endif %}
 
 <div class="card" aria-labelledby="documents-heading">
-    <div class="card__head"><h2 id="documents-heading">Documents</h2></div>
+    <div class="card__head"><h2 id="documents-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Documents</h2></div>
     {% if documents %}
     <ul class="doc-list">
         {% for d in documents %}
@@ -116,6 +117,10 @@
                 <div class="doc-name"><a href="/projects/{{ project.id }}/documents/{{ d.id }}">{{ d.filename }}</a></div>
                 <div class="doc-meta">{{ d.doc_type | replace('_', ' ') }} — uploaded {{ d.uploaded_at[:10] }}</div>
             </div>
+            <span class="doc-row__spacer"></span>
+            <a class="icon-btn" href="/projects/{{ project.id }}/documents/{{ d.id }}" title="Download {{ d.filename }}" aria-label="Download {{ d.filename }}">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </a>
         </li>
         {% endfor %}
     </ul>
@@ -126,7 +131,7 @@
 
 {% if can_upload_responses %}
 <div class="card" aria-labelledby="responses-heading">
-    <div class="card__head"><h2 id="responses-heading">Upload Client Responses</h2></div>
+    <div class="card__head"><h2 id="responses-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload Client Responses</h2></div>
     <div class="card__body">
         <p>Once the client has answered the clarification questions, upload their filled-in
            document here to resume automatic processing.</p>
@@ -144,7 +149,7 @@
 
 {% if requirements %}
 <div class="card" aria-labelledby="requirements-heading">
-    <div class="card__head"><h2 id="requirements-heading">Extracted Requirements</h2></div>
+    <div class="card__head"><h2 id="requirements-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> Extracted Requirements</h2></div>
     <table class="requirements-table">
         <caption class="visually-hidden">Extracted requirements with status</caption>
         <thead>
@@ -181,7 +186,7 @@
 
 {% if pricing %}
 <div class="card" aria-labelledby="pricing-heading">
-    <div class="card__head"><h2 id="pricing-heading">Effort &amp; Pricing Summary</h2></div>
+    <div class="card__head"><h2 id="pricing-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> Effort &amp; Pricing Summary</h2></div>
     <div class="card__body">
         <div class="stat-row">
             <div class="stat">
@@ -203,7 +208,7 @@
 
 {% if compliance_matrix %}
 <div class="card" aria-labelledby="compliance-heading">
-    <div class="card__head"><h2 id="compliance-heading">Compliance Matrix</h2></div>
+    <div class="card__head"><h2 id="compliance-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="9" x2="9" y2="21"/></svg> Compliance Matrix</h2></div>
     <table class="compliance-table">
         <caption class="visually-hidden">Compliance matrix covering every extracted requirement</caption>
         <thead>

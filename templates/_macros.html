@@ -1,0 +1,13 @@
+{# Shared status-pill icon so every list (dashboard, home, project detail) renders the same
+   icon for the same status instead of each template inventing its own. #}
+{% macro status_icon(status) %}
+{%- if status == "Analyzing" -%}
+<span class="pulse-dot" aria-hidden="true"></span>
+{%- elif status in ("Clarifications Sent", "Responses Pending") -%}
+<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+{%- elif status == "Ready to Generate" -%}
+<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+{%- elif status == "Submitted" -%}
+<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+{%- endif -%}
+{% endmacro %}

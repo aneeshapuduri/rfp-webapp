@@ -10,6 +10,10 @@
 </div>
 
 <div class="card">
+    <div class="card__head">
+        <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/></svg> All Activity</h2>
+        <span class="doc-meta">{{ entries | length }} entr{{ "y" if entries | length == 1 else "ies" }}</span>
+    </div>
     <table class="audit-table">
         <caption class="visually-hidden">Audit log of all system actions</caption>
         <thead>
@@ -25,9 +29,9 @@
             {% for e in entries %}
             <tr>
                 <td class="cell-muted" style="white-space:nowrap;">{{ e.timestamp[:19] | replace("T", " ") }}</td>
-                <td>{{ e.user_identity or "system" }}</td>
-                <td>{{ e.action }}</td>
-                <td>{% if e.project_id %}<a href="/projects/{{ e.project_id }}">{{ e.project_id[:8] }}…</a>{% else %}—{% endif %}</td>
+                <td style="font-weight:600;">{{ e.user_identity or "system" }}</td>
+                <td><span class="cap-chip">{{ e.action | replace('_', ' ') }}</span></td>
+                <td>{% if e.project_id %}<a href="/projects/{{ e.project_id }}">{{ e.project_id[:8] }}…</a>{% else %}<span class="cell-muted">&mdash;</span>{% endif %}</td>
                 <td>{% if e.detail %}<code>{{ e.detail }}</code>{% else %}<span class="cell-muted">—</span>{% endif %}</td>
             </tr>
             {% endfor %}

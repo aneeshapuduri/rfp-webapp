@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import status_icon %}
 {% block title %}Home — RFP Proposal Agent{% endblock %}
 {% block content %}
 <div class="home-hero">
@@ -53,7 +54,7 @@
 <div class="dash-grid">
     <div class="card">
         <div class="card__head">
-            <h2>Recent Projects</h2>
+            <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Recent Projects</h2>
             <a href="/" class="btn-link" style="text-decoration:none; font-size:.85rem; font-weight:600;">View all &rarr;</a>
         </div>
         {% if recent_projects %}
@@ -64,7 +65,7 @@
                     <td><a href="/projects/{{ p.id }}">{{ p.name }}</a></td>
                     <td>
                         <span class="status-pill status-{{ p.status | replace(' ', '-') | lower }}">
-                            {% if p.status == "Analyzing" %}<span class="pulse-dot" aria-hidden="true"></span>{% endif %}
+                            {{ status_icon(p.status) }}
                             {{ p.status_label }}
                         </span>
                     </td>
@@ -75,7 +76,7 @@
         </table>
         {% else %}
         <div class="empty-state">
-            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <div class="empty-state__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
             <p>No projects yet. <a href="/new">Upload your first bid invitation</a> to get started.</p>
         </div>
         {% endif %}
@@ -83,7 +84,7 @@
 
     <div class="card">
         <div class="card__head">
-            <h2>Recent Activity</h2>
+            <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Recent Activity</h2>
             <a href="/audit" class="btn-link" style="text-decoration:none; font-size:.85rem; font-weight:600;">Full log &rarr;</a>
         </div>
         <div class="card__body">
@@ -107,7 +108,7 @@
 </div>
 
 <div class="card" style="margin-top:20px;">
-    <div class="card__head"><h2>How the pipeline works</h2></div>
+    <div class="card__head"><h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg> How the pipeline works</h2></div>
     <div class="card__body">
         <div class="showcase-pipeline">
             {% for stage in pipeline_stages %}

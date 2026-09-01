@@ -9,7 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body{% if not current_user %} class="is-auth"{% endif %}>
 <a class="skip-link" href="#main-content">Skip to main content</a>
 {% if current_user %}
 <div class="shell">
@@ -55,13 +55,19 @@
     <div class="sidebar__spacer"></div>
 
     {% if demo_mode %}
-    <div class="sidebar__flag" role="status"><b>DEMO MODE</b> &mdash; canned output, not a real AI analysis.</div>
+    <div class="sidebar__flag" role="status" style="margin-bottom:8px;"><b>DEMO MODE</b> &mdash; canned output, not a real AI analysis.</div>
     {% endif %}
-    <div class="sidebar__flag">
-      <b>{{ current_user.username }}</b> &middot; {{ current_user.role }}<br>
-      <form action="/logout" method="post" class="inline-form" style="margin-top:6px;">
+    <div class="sidebar__account">
+      <div class="sidebar__avatar" aria-hidden="true">{{ current_user.username[:2] | upper }}</div>
+      <div class="sidebar__account-info">
+        <div class="sidebar__account-name">{{ current_user.username }}</div>
+        <div class="sidebar__account-role">{{ current_user.role }}</div>
+      </div>
+      <form action="/logout" method="post" class="inline-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="btn-link">Log out</button>
+        <button type="submit" class="btn-link" title="Log out" aria-label="Log out">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
       </form>
     </div>
   </nav>

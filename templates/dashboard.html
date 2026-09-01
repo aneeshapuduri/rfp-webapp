@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import status_icon %}
 {% block title %}Projects — RFP Proposal Agent{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -33,7 +34,7 @@
                 <td>{{ p.agency or "—" }}</td>
                 <td>
                     <span class="status-pill status-{{ p.status | replace(' ', '-') | lower }}">
-                        {% if p.status == "Analyzing" %}<span class="pulse-dot" aria-hidden="true"></span>{% endif %}
+                        {{ status_icon(p.status) }}
                         {{ p.status_label }}
                     </span>
                     {% if p.error_message %}
@@ -49,7 +50,7 @@
     </table>
 {% else %}
     <div class="empty-state">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+        <div class="empty-state__icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg></div>
         <p>No projects yet. <a href="/new">Upload your first bid invitation</a> to get started.</p>
     </div>
 {% endif %}

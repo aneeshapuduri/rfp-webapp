@@ -14,7 +14,13 @@
 {% endif %}
 
 <div class="card">
-    <div class="card__head"><h2>Accounts</h2></div>
+    <div class="card__head">
+        <h2>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            Accounts
+        </h2>
+        <span class="doc-meta">{{ users | length }} account{{ "s" if users | length != 1 else "" }}</span>
+    </div>
     <table class="user-table">
         <caption class="visually-hidden">Existing user accounts</caption>
         <thead>
@@ -23,28 +29,44 @@
                 <th scope="col">Role</th>
                 <th scope="col">Status</th>
                 <th scope="col">Created</th>
-                <th scope="col">Actions</th>
+                <th scope="col" style="text-align:right;">Actions</th>
             </tr>
         </thead>
         <tbody>
             {% for u in users %}
             <tr>
-                <td>{{ u.username }}</td>
-                <td>{{ u.role }}</td>
+                <td>
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <div style="width:28px; height:28px; border-radius:50%; background:linear-gradient(145deg,#4A7DE0,#6D42C7); color:#fff; font-weight:700; font-size:11px; display:flex; align-items:center; justify-content:center; flex-shrink:0;" aria-hidden="true">{{ u.username[:2] | upper }}</div>
+                        <span style="font-weight:600;">{{ u.username }}</span>
+                        {% if u.id == current_user.id %}<span class="doc-meta">(you)</span>{% endif %}
+                    </div>
+                </td>
+                <td>
+                    {% if u.role == "admin" %}
+                    <span class="cap-chip" style="background:var(--decision-bg); color:var(--decision);">Admin</span>
+                    {% else %}
+                    <span class="cap-chip">Member</span>
+                    {% endif %}
+                </td>
                 <td>
                     {% if u.is_active %}
-                    <span class="status-pill status-submitted">Active</span>
+                    <span class="status-pill status-submitted">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                        Active
+                    </span>
                     {% else %}
                     <span class="status-pill status-analyzing">Deactivated</span>
                     {% endif %}
                 </td>
-                <td>{{ u.created_at[:10] }}</td>
+                <td class="cell-muted">{{ u.created_at[:10] }}</td>
                 <td>
                     {% if u.id != current_user.id %}
+                    <div style="display:flex; gap:8px; justify-content:flex-end;">
                         {% if u.is_active %}
                         <form action="/admin/users/{{ u.id }}/deactivate" method="post" class="inline-form">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn-danger btn-small">Deactivate</button>
+                            <button type="submit" class="btn-ghost btn-small">Deactivate</button>
                         </form>
                         {% else %}
                         <form action="/admin/users/{{ u.id }}/activate" method="post" class="inline-form">
@@ -52,8 +74,16 @@
                             <button type="submit" class="btn-primary btn-small">Reactivate</button>
                         </form>
                         {% endif %}
+                        <form action="/admin/users/{{ u.id }}/delete" method="post" class="inline-form"
+                              onsubmit="return confirm('Permanently delete the account \'{{ u.username }}\'? This can\'t be undone — their past actions stay in the audit log, but they will need a brand-new account to sign in again.');">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="icon-btn icon-btn-danger" title="Delete account" aria-label="Delete {{ u.username }}">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                            </button>
+                        </form>
+                    </div>
                     {% else %}
-                    <span class="doc-meta">(you)</span>
+                    <span class="doc-meta" style="display:block; text-align:right;">&mdash;</span>
                     {% endif %}
                 </td>
             </tr>
@@ -63,7 +93,12 @@
 </div>
 
 <div class="card">
-    <div class="card__head"><h2 id="new-user-heading">Add a user</h2></div>
+    <div class="card__head">
+        <h2>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add a user
+        </h2>
+    </div>
     <div class="card__body">
         <form action="/admin/users" method="post" class="upload-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
