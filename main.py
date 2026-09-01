@@ -2,6 +2,7 @@
 RFP Proposal Agent — web application.
 
 Routes:
+  GET  /home                          personalized welcome page (real project/activity counts)
   GET  /                              dashboard (project list)
   GET  /login, POST /login            sign in
   POST /logout                        sign out
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import pathlib
 import secrets
 
@@ -48,8 +50,11 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # Order matters: the LAST middleware added is the OUTERMOST one, i.e. it runs first on the way
 # in. SessionMiddleware must run before AuthGateMiddleware can read request.session, so it's
 # added second (outer); AuthGateMiddleware is added first (inner).
+_SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
+
 app.add_middleware(auth.AuthGateMiddleware)
-app.add_middleware(SessionMiddleware, secret_key=auth.get_session_secret(), same_site="lax", https_only=False)
+app.add_middleware(SessionMiddleware, secret_key=auth.get_session_secret(), same_site="lax",
+                    https_only=_SESSION_COOKIE_SECURE)
 
 
 @app.on_event("startup")
@@ -72,6 +77,19 @@ STATUS_LABELS = {
     "Responses Pending": "Responses Pending",
     "Ready to Generate": "Ready for Review",
     "Submitted": "Submitted",
+}
+
+# The order the pipeline actually moves projects through — used both for the project-detail
+# stepper and for the Home page's "how it works" strip, so the two never describe different
+# pipelines.
+STATUS_ORDER = ["Analyzing", "Clarifications Sent", "Responses Pending", "Ready to Generate", "Submitted"]
+
+STATUS_ORDER_DESCRIPTIONS = {
+    "Analyzing": "The bid invitation is parsed and every requirement is extracted and classified.",
+    "Clarifications Sent": "Anything ambiguous gets a clarification question queued for the client.",
+    "Responses Pending": "Waiting on the client's answers to resume automatically.",
+    "Ready to Generate": "Requirements are resolved — pricing and the compliance matrix are ready.",
+    "Submitted": "The proposal has been generated and marked submitted.",
 }
 
 
@@ -117,9 +135,9 @@ async def _read_capped(file: UploadFile, max_bytes: int) -> bytes:
 # ---------- Auth ----------
 
 @app.get("/login", response_class=HTMLResponse)
-def login_form(request: Request, next: str = "/"):
+def login_form(request: Request, next: str = "/home"):
     if auth.current_user(request):
-        return RedirectResponse("/", status_code=303)
+        return RedirectResponse("/home", status_code=303)
     request.session.setdefault("csrf_token", secrets.token_hex(32))
     return templates.TemplateResponse(request, "login.html", {
         "csrf_token": request.session["csrf_token"], "next": next, "error": None,
@@ -131,9 +149,9 @@ async def login_submit(request: Request):
     form = await request.form()
     username = str(form.get("username", ""))
     password = str(form.get("password", ""))
-    next_path = str(form.get("next") or "/")
+    next_path = str(form.get("next") or "/home")
     if not next_path.startswith("/"):
-        next_path = "/"  # never redirect off-site
+        next_path = "/home"  # never redirect off-site
 
     user = db.get_user_by_username(username)
     if not user or not user["is_active"] or not auth.verify_password(password, user["password_hash"]):
@@ -157,6 +175,35 @@ def logout(request: Request, _: None = Depends(auth.verify_csrf)):
         db.log_action("logout", user_identity=user["username"])
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
+
+
+# ---------- Home ----------
+
+@app.get("/home", response_class=HTMLResponse)
+def home(request: Request):
+    user = auth.current_user(request)
+    projects = [_enrich_project(p) for p in db.list_projects()]
+
+    awaiting_client = sum(1 for p in projects if p["status"] in ("Clarifications Sent", "Responses Pending"))
+    in_review = sum(1 for p in projects if p["status"] in ("Analyzing", "Ready to Generate"))
+    submitted = sum(1 for p in projects if p["status"] == "Submitted")
+    needs_attention = sum(1 for p in projects if p.get("error_message"))
+
+    recent_projects = projects[:5]
+    recent_activity = db.list_audit_log(limit=8)
+
+    return templates.TemplateResponse(request, "home.html", _ctx(request,
+        total_projects=len(projects),
+        awaiting_client=awaiting_client,
+        in_review=in_review,
+        submitted=submitted,
+        needs_attention=needs_attention,
+        recent_projects=recent_projects,
+        recent_activity=recent_activity,
+        pipeline_stages=[
+            {"name": s, "description": STATUS_ORDER_DESCRIPTIONS[s]} for s in STATUS_ORDER
+        ],
+    ))
 
 
 # ---------- Dashboard / projects ----------
