@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import pathlib
 import secrets
 
@@ -49,11 +48,8 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # Order matters: the LAST middleware added is the OUTERMOST one, i.e. it runs first on the way
 # in. SessionMiddleware must run before AuthGateMiddleware can read request.session, so it's
 # added second (outer); AuthGateMiddleware is added first (inner).
-_SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
-
 app.add_middleware(auth.AuthGateMiddleware)
-app.add_middleware(SessionMiddleware, secret_key=auth.get_session_secret(), same_site="lax",
-                    https_only=_SESSION_COOKIE_SECURE)
+app.add_middleware(SessionMiddleware, secret_key=auth.get_session_secret(), same_site="lax", https_only=False)
 
 
 @app.on_event("startup")
