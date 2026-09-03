@@ -12,6 +12,7 @@ Routes:
                                        Project page just re-renders with an inline error), then
                                        creates the project + kicks off the background pipeline
   GET  /projects/{id}                 project detail view
+  GET  /projects/{id}/status          tiny JSON status poll used by the page's auto-refresh script
   POST /projects/{id}/responses       upload a filled-in clarification doc to auto-fill the
                                        per-question response boxes below (does not apply anything
                                        by itself — review/edit, then submit)
@@ -25,7 +26,11 @@ Routes:
                                        'Not a Bid Document' status this route requires
   POST /projects/{id}/assumptions/accept  accept AI assumptions — only from 'Awaiting Assumptions Approval'
   POST /projects/{id}/assumptions/cancel  cancel the bid over the assumptions made — same gate
-  POST /projects/{id}/preview/generate    submit the edited preview + template choice, builds the docx
+  POST /projects/{id}/preview/document     builds & downloads the current preview as a .docx —
+                                            review or edit it directly in Word before finalizing
+  POST /projects/{id}/preview/generate    submit the edited preview + template choice (or an
+                                           edited document downloaded above and re-uploaded),
+                                           builds/stores the final docx
   POST /projects/{id}/approve         mark Submitted — only valid from 'Ready to Generate'
   POST /projects/{id}/reject          mark Declined — only valid from 'Ready to Generate'
   POST /projects/{id}/delete          soft-delete a project
@@ -60,6 +65,7 @@ import db
 import storage
 from pipeline_runner import (
     DEMO_MODE,
+    build_preview_document_bytes,
     check_document_validity,
     extract_client_responses,
     finalize_proposal,
@@ -186,6 +192,21 @@ async def _read_capped(file: UploadFile, max_bytes: int) -> bytes:
             raise storage.UploadTooLarge(f"File is larger than the {max_bytes // (1024 * 1024)} MB limit.")
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _is_file_upload(value) -> bool:
+    """True if a field pulled from `await request.form()` is an actual uploaded file with a
+    filename, false if it's missing or a plain text field.
+
+    Deliberately duck-typed (checks for a `filename` attribute) rather than
+    `isinstance(value, UploadFile)`: request.form() returns Starlette's own
+    starlette.datastructures.UploadFile, and FastAPI's fastapi.UploadFile is a *subclass* of
+    that — so isinstance(value, fastapi.UploadFile) is always False for a value that came from
+    request.form() directly, even though it's a perfectly real upload. That mismatch was a real,
+    silent bug here: every route reading an optional file straight from request.form() (as
+    opposed to a File(...) function parameter, which FastAPI does instantiate as its own
+    subclass) treated every upload as if it were empty and skipped it entirely, with no error."""
+    return bool(getattr(value, "filename", None))
 
 
 # ---------- Auth ----------
@@ -396,12 +417,24 @@ def project_detail(request: Request, project_id: str):
         escalated_clarification_items=escalated_clarification_items,
         pending_responses=pending_responses,
         no_answers_found=request.query_params.get("no_answers_found") == "1",
+        generating=request.query_params.get("generating") == "1",
         capability_fit=capability_fit,
         compliance_matrix=compliance_matrix,
         pricing=pricing,
         preview_content=preview_content,
         can_upload_responses=project["status"] in ("Clarifications Sent", "Responses Pending"),
     ))
+
+
+@app.get("/projects/{project_id}/status")
+def project_status(request: Request, project_id: str):
+    """Tiny JSON endpoint the project page polls every few seconds to notice a status change
+    without the user having to manually refresh — see the auto-refresh script in
+    project_detail.html. Deliberately minimal (no content, just enough to decide whether to
+    reload) so polling stays cheap; still goes through the same access check as the full page."""
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    return {"status": project["status"], "has_error": bool(project.get("error_message"))}
 
 
 @app.post("/projects/{project_id}/responses")
@@ -619,29 +652,20 @@ def cancel_assumptions(request: Request, project_id: str, _: None = Depends(auth
 
 
 _EDITABLE_NARRATIVE_FIELDS = ["executive_summary", "understanding", "technology_approach",
-                              "past_performance", "closing"]
+                              "past_performance", "closing", "scope_of_services",
+                              "out_of_scope_of_services", "project_objectives",
+                              "project_deliverables", "staffing_readiness",
+                              "technical_assumptions", "project_dependencies",
+                              "service_boundaries"]
 
 
-@app.post("/projects/{project_id}/preview/generate")
-async def generate_final_proposal(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    project_id: str,
-    _: None = Depends(auth.verify_csrf),
-):
-    """The editable-preview submit route. Reassembles the persisted phase4_content_json with
-    whatever the user edited — narrative text, the assumptions list, staffing/timeline/compliance
-    tables — recomputes pricing from the (possibly edited) staffing numbers, optionally stores an
-    uploaded custom template, and hands everything to finalize_proposal() as a background task
-    (it does real work: building the docx and uploading it)."""
-    user = auth.current_user(request)
-    project = _get_project_or_403(project_id, user)
-    if project["status"] != "Awaiting Preview":
-        raise HTTPException(400, "This project isn't at the preview/customize step.")
-    if not project.get("phase4_content_json"):
-        raise HTTPException(400, "No generated content found to preview.")
-
-    form = await request.form()
+def _reassemble_preview_content(project: dict, form) -> dict:
+    """Reassembles the persisted phase4_content_json with whatever's currently in the preview
+    form — narrative text, the assumptions list, and the staffing/timeline/compliance tables —
+    recomputing pricing from the (possibly edited) staffing numbers via the same deterministic
+    engine Phase 3 uses. Shared by the preview-document download route and the final-generate
+    route below so both build from identical logic; a pure function of (project, form) with no
+    side effects, so it's safe to call from either."""
     content = json.loads(project["phase4_content_json"])
 
     for field in _EDITABLE_NARRATIVE_FIELDS:
@@ -706,14 +730,110 @@ async def generate_final_proposal(
         if edited_matrix:
             content["compliance_matrix"] = edited_matrix
 
+    return content
+
+
+def _read_template_choice(form) -> str:
     template_choice = str(form.get("template_choice", "default"))
-    if template_choice not in ("default", "custom"):
-        template_choice = "default"
+    return template_choice if template_choice in ("default", "custom") else "default"
+
+
+@app.post("/projects/{project_id}/preview/document")
+async def download_preview_document(
+    request: Request,
+    project_id: str,
+    _: None = Depends(auth.verify_csrf),
+):
+    """Builds the actual proposal document — using whatever's currently in the preview form —
+    and returns it as a downloadable .docx, without finalizing or persisting anything. This is
+    the "preview in document format" step: download it, open it in Word (or similar) to review
+    or edit the real formatted document — for a custom template, that includes the client's own
+    template with matched sections inserted in place and any sections it doesn't have appended
+    under "Needs Manual Placement" — then either come back and click Generate Final Bid, or
+    upload the edited copy there (as "final_document") to use it as the final bid directly."""
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if project["status"] != "Awaiting Preview":
+        raise HTTPException(400, "This project isn't at the preview/customize step.")
+    if not project.get("phase4_content_json"):
+        raise HTTPException(400, "No generated content found to preview.")
+
+    form = await request.form()
+    content = _reassemble_preview_content(project, form)
+    template_choice = _read_template_choice(form)
 
     custom_template_bytes = None
     if template_choice == "custom":
         custom_template = form.get("custom_template")
-        if not isinstance(custom_template, UploadFile) or not custom_template.filename:
+        if not _is_file_upload(custom_template):
+            raise HTTPException(400, "Please upload a .docx template to preview it, or choose the default template.")
+        try:
+            storage.validate_extension(custom_template.filename, {".docx"})
+        except storage.UnsupportedFileType as e:
+            raise HTTPException(400, str(e)) from e
+        custom_template_bytes = await _read_capped(custom_template, storage.MAX_UPLOAD_BYTES)
+
+    try:
+        proposal_bytes = build_preview_document_bytes(content, template_choice, custom_template_bytes)
+    except Exception as e:
+        raise HTTPException(400, f"Couldn't build a preview document: {e}") from e
+
+    db.log_action("preview_document_downloaded", project_id, {"template_choice": template_choice},
+                  user_identity=user["username"])
+
+    return Response(
+        content=proposal_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": 'attachment; filename="proposal_preview.docx"'},
+    )
+
+
+@app.post("/projects/{project_id}/preview/generate")
+async def generate_final_proposal(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    project_id: str,
+    _: None = Depends(auth.verify_csrf),
+):
+    """The editable-preview submit route. Reassembles the persisted phase4_content_json with
+    whatever the user edited — narrative text, the assumptions list, staffing/timeline/compliance
+    tables — recomputes pricing from the (possibly edited) staffing numbers, optionally stores an
+    uploaded custom template, and hands everything to finalize_proposal() as a background task
+    (it does real work: building the docx and uploading it).
+
+    If the user downloaded the preview document (see download_preview_document above), edited it
+    directly (in Word or similar), and uploaded that edited copy back as "final_document", that
+    upload is used as the final proposal as-is — the whole point of editing inside the actual
+    document — skipping the build (and the template choice) entirely for this submission."""
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if project["status"] != "Awaiting Preview":
+        raise HTTPException(400, "This project isn't at the preview/customize step.")
+    if not project.get("phase4_content_json"):
+        raise HTTPException(400, "No generated content found to preview.")
+
+    form = await request.form()
+
+    final_document = form.get("final_document")
+    final_document_bytes = None
+    if _is_file_upload(final_document):
+        try:
+            storage.validate_extension(final_document.filename, {".docx"})
+        except storage.UnsupportedFileType as e:
+            raise HTTPException(400, str(e)) from e
+        final_document_bytes = await _read_capped(final_document, storage.MAX_UPLOAD_BYTES)
+        display_name, stored_path, encrypted = storage.save_upload(
+            project_id, final_document.filename, final_document_bytes
+        )
+        db.add_document(project_id, "client_edited_final", display_name, stored_path, encrypted)
+
+    content = _reassemble_preview_content(project, form)
+    template_choice = _read_template_choice(form)
+
+    custom_template_bytes = None
+    if final_document_bytes is None and template_choice == "custom":
+        custom_template = form.get("custom_template")
+        if not _is_file_upload(custom_template):
             raise HTTPException(400, "Please upload a .docx template, or choose the default template.")
         try:
             storage.validate_extension(custom_template.filename, {".docx"})
@@ -726,11 +846,19 @@ async def generate_final_proposal(
         db.add_document(project_id, "custom_template", display_name, stored_path, encrypted)
 
     db.update_project(project_id, template_choice=template_choice)
-    db.log_action("preview_submitted", project_id, {"template_choice": template_choice},
-                  user_identity=user["username"])
-    background_tasks.add_task(finalize_proposal, project_id, content, template_choice, custom_template_bytes)
+    db.log_action("preview_submitted", project_id, {
+        "template_choice": template_choice,
+        "used_uploaded_final_document": final_document_bytes is not None,
+    }, user_identity=user["username"])
+    background_tasks.add_task(
+        finalize_proposal, project_id, content, template_choice, custom_template_bytes, final_document_bytes
+    )
 
-    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+    # ?generating=1 tells the project page to show a "generating now" spinner and poll for
+    # completion instead of silently re-showing the same edit form with no sign anything
+    # happened — status stays "Awaiting Preview" for the whole background build, so without this
+    # the page would look unchanged until the user manually refreshes.
+    return RedirectResponse(f"/projects/{project_id}?generating=1", status_code=303)
 
 
 @app.post("/projects/{project_id}/delete")

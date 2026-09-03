@@ -36,7 +36,7 @@ from pipeline.phase2_pipeline import resolve_with_responses
 from pipeline.phase3_pipeline import load_company_profile, run_phase3
 from pipeline.phase4_pipeline import ComplianceMatrixIncompleteError, run_phase4
 from pipeline.pricing_engine import build_pricing_summary
-from pipeline.response_reader import read_client_responses
+from pipeline.response_reader import normalize_q_num, read_answer_rows
 from pipeline.rfp_reader import read_rfp
 from pipeline.schema import Phase1Result
 from pipeline.template_mapper import extract_template_headings, map_sections_to_template
@@ -267,31 +267,57 @@ def _config_path(name: str):
     return pathlib.Path(__file__).resolve().parent / "config" / name
 
 
+def _open_requirement_ids_in_order(project: dict) -> list[str]:
+    """The currently-still-ambiguous requirement IDs, in the same relative order they were
+    originally asked (i.e. the order they appear in phase1_result_json, which is also the order
+    build_clarification_doc numbered them in). Used only as the positional-matching fallback in
+    extract_client_responses below."""
+    if not project.get("phase1_result_json"):
+        return []
+    saved = json.loads(project["phase1_result_json"])
+    return [r["id"] for r in saved["requirements"] if r["status"] == "ambiguous"]
+
+
 def extract_client_responses(project_id: str, content: bytes) -> dict[str, str]:
-    """Parses an uploaded filled-in clarification doc into {requirement_id: answer_text},
-    using the sidecar Q# -> requirement_id mapping saved when the doc was generated. Does NOT
-    apply anything to the pipeline — this only extracts, so main.py can use it to pre-fill the
-    per-question text boxes on the project page for the user to review (and edit) before
+    """Parses an uploaded filled-in clarification doc into {requirement_id: answer_text}. Does
+    NOT apply anything to the pipeline — this only extracts, so main.py can use it to pre-fill
+    the per-question text boxes on the project page for the user to review (and edit) before
     actually submitting anything. Takes raw bytes instead of a path for the same reason as
-    process_new_upload — no persistent plaintext copy of the client's document."""
+    process_new_upload — no persistent plaintext copy of the client's document.
+
+    Matching happens in two passes:
+      1. Strict: each row's Q# against the sidecar Q# -> requirement_id mapping saved when the
+         original clarification doc was generated (tolerating "1" vs "Q1" vs "1." — see
+         response_reader.normalize_q_num).
+      2. Positional fallback, only if pass 1 matched nothing at all: the Nth answered row maps
+         to the Nth currently-open question, in the order they were originally asked. This
+         covers the common real-world case where the answer document isn't the exact file we
+         generated — the client (or the bid team) retyped it, renumbered it, or used their own
+         format — so the Q# labels don't line up with our internal mapping even though the
+         answers are in the same order as the questions. Without this fallback, autofill quietly
+         found zero matches for any document that wasn't byte-for-byte our own template."""
     project = db.get_project(project_id)
-    mapping = json.loads(project["clarification_mapping_json"])
+    mapping = json.loads(project["clarification_mapping_json"]) if project.get("clarification_mapping_json") else {}
 
-    def _read_responses(path):
-        # The mapping file is small, app-generated JSON — write/delete it alongside the
-        # temp docx rather than leaving a copy in the generated/ directory permanently.
-        fd, mapping_path = tempfile.mkstemp(suffix=".json")
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(mapping, f)
-            return read_client_responses(path, mapping_path)
-        finally:
-            try:
-                os.unlink(mapping_path)
-            except OSError:
-                pass
+    rows = _read_upload_via_temp_file(content, ".docx", read_answer_rows)
 
-    return _read_upload_via_temp_file(content, ".docx", _read_responses)
+    responses: dict[str, str] = {}
+    for q_num_raw, _question, answer in rows:
+        req_id = mapping.get(q_num_raw) or mapping.get(normalize_q_num(q_num_raw) or "")
+        if req_id:
+            responses[req_id] = answer
+
+    if not responses and rows:
+        open_ids_in_order = _open_requirement_ids_in_order(project)
+        for (_, _, answer), req_id in zip(rows, open_ids_in_order):
+            responses.setdefault(req_id, answer)
+        if responses:
+            db.log_action(
+                "responses_autofetched_positional_fallback", project_id,
+                {"matched_count": len(responses), "row_count": len(rows)},
+            )
+
+    return responses
 
 
 def _apply_client_responses(project_id: str, responses: dict[str, str]):
@@ -393,29 +419,49 @@ def _run_phase3_and_4(project_id: str, result: Phase1Result, client: ClaudeClien
         db.log_action("awaiting_preview", project_id, {})
 
 
+def build_preview_document_bytes(content: dict, template_choice: str,
+                                  custom_template_bytes: bytes | None) -> bytes:
+    """Builds exactly the same document finalize_proposal() would produce — the default fresh
+    document, or (for a custom template) the client's own template with matched sections
+    inserted in place and any sections it doesn't have appended under a 'Needs Manual
+    Placement' heading, via the existing template_mapper machinery — but just returns the bytes
+    instead of persisting anything. This is what powers the 'Download Preview Document' action:
+    the user can open the actual formatted document (in Word or similar) and review or edit it
+    directly, rather than only ever seeing plain web-form fields, before finalizing anything."""
+    company = load_company_profile()
+    full_content = dict(content)
+    full_content["company"] = company
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = str(pathlib.Path(tmp_dir) / f"_tmp_{db.new_id()}.docx")
+        if template_choice == "custom" and custom_template_bytes:
+            template_path = str(pathlib.Path(tmp_dir) / f"_template_{db.new_id()}.docx")
+            pathlib.Path(template_path).write_bytes(custom_template_bytes)
+            headings = extract_template_headings(template_path)
+            mapping = map_sections_to_template(headings)
+            build_final_proposal(tmp_path, full_content, template_path=template_path, section_mapping=mapping)
+        else:
+            build_final_proposal(tmp_path, full_content)
+        return pathlib.Path(tmp_path).read_bytes()
+
+
 def finalize_proposal(project_id: str, edited_content: dict, template_choice: str,
-                       custom_template_bytes: bytes | None):
+                       custom_template_bytes: bytes | None, final_document_bytes: bytes | None = None):
     """Runs once the user submits the editable preview (POST /projects/{id}/preview/generate).
     This is the only place the final .docx is actually built now — everything before this point
     (Phase 1-4, the assumptions gate, the preview itself) only ever produced/edited JSON content.
     Real work happens here (docx build + Supabase upload), so this is invoked as a background
-    task, unlike the cheap status-flip routes for the assumptions gate."""
-    try:
-        company = load_company_profile()
-        content = dict(edited_content)
-        content["company"] = company
+    task, unlike the cheap status-flip routes for the assumptions gate.
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = str(pathlib.Path(tmp_dir) / f"_tmp_{db.new_id()}.docx")
-            if template_choice == "custom" and custom_template_bytes:
-                template_path = str(pathlib.Path(tmp_dir) / f"_template_{db.new_id()}.docx")
-                pathlib.Path(template_path).write_bytes(custom_template_bytes)
-                headings = extract_template_headings(template_path)
-                mapping = map_sections_to_template(headings)
-                build_final_proposal(tmp_path, content, template_path=template_path, section_mapping=mapping)
-            else:
-                build_final_proposal(tmp_path, content)
-            proposal_bytes = pathlib.Path(tmp_path).read_bytes()
+    `final_document_bytes`, when provided, is the user's own edited copy of the preview document
+    (downloaded via build_preview_document_bytes above, edited directly in Word, then re-uploaded
+    on the preview form) — in that case it's used as-is as the final proposal, skipping the
+    build entirely, since the user already produced the exact final document by hand."""
+    try:
+        if final_document_bytes is not None:
+            proposal_bytes = final_document_bytes
+        else:
+            proposal_bytes = build_preview_document_bytes(edited_content, template_choice, custom_template_bytes)
 
         stored_path, encrypted = storage.save_generated(project_id, "final_proposal.docx", proposal_bytes)
         db.add_document(project_id, "final_proposal", "final_proposal.docx", stored_path, encrypted)
@@ -425,7 +471,10 @@ def finalize_proposal(project_id: str, edited_content: dict, template_choice: st
             phase4_content_json=json.dumps(edited_content),
             template_choice=template_choice,
         )
-        db.log_action("final_proposal_generated", project_id, {"template_choice": template_choice})
+        db.log_action("final_proposal_generated", project_id, {
+            "template_choice": template_choice,
+            "used_uploaded_final_document": final_document_bytes is not None,
+        })
     except Exception as e:  # noqa: BLE001
         _record_failure(project_id, "finalize_proposal", e, status="Awaiting Preview")
 
