@@ -74,13 +74,12 @@ def part3_template_mapping():
     mock_headings = [
         "1.0 Executive Overview",
         "2.0 Our Understanding of Your Needs",
-        "3.0 Technical Solution",
-        "4.0 Project Staffing",
-        "5.0 Schedule",
-        "6.0 Cost Proposal",
-        "7.0 References",
-        "8.0 Requirements Traceability Matrix",
-        "9.0 Appendix Z: Vendor History",  # should NOT match anything well
+        "3.0 Project Staffing",
+        "4.0 Schedule",
+        "5.0 Cost Proposal",
+        "6.0 References",
+        "7.0 Requirements Traceability Matrix",
+        "8.0 Appendix Z: Vendor History",  # should NOT match anything well
     ]
     result = map_sections_to_template(mock_headings)
     print("Matched:")
@@ -90,8 +89,8 @@ def part3_template_mapping():
     for s in result["unmatched"]:
         print(f"  {s!r}")
 
-    assert "Executive Summary" in result["matched"], "Should have matched Executive Overview"
-    assert len(result["unmatched"]) > 0, "Expected at least Assumptions or similar to need manual placement"
+    assert "Executive Summary and Bidder Overview" in result["matched"], "Should have matched Executive Overview"
+    assert len(result["unmatched"]) > 0, "Expected many sections (the 26 newer ones especially) to need manual placement"
     print("\nPASS — confident matches are used, low-confidence ones are flagged rather than guessed.")
 
 

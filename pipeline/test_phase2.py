@@ -7,8 +7,9 @@ Tests the complete Phase 2 loop against the Northfield (ambiguous) case:
      (not a fabricated dict — this proves the real document round-trips)
   4. Read the filled document back via response_reader.py
   5. Resolve each answer (canned resolutions standing in for the live Claude call)
-  6. Re-check the gate — expect it to still halt, but now distinguishing a genuinely
-     unresolved item (escalated_for_manual_review) from the original auto-halt
+  6. Re-check the gate — expect it to now proceed: a response that came back insufficient is
+     escalated_for_manual_review (carried into Phase 3/4 as an assumption-needing item) rather
+     than blocking the pipeline forever waiting for a client answer that will never arrive
 """
 import pathlib
 import sys
@@ -103,17 +104,20 @@ def main():
     escalated = result.get_escalated()
     print(f"      Escalated for manual review: {[r.id for r in escalated]}")
 
-    assert gate_after == "halt_for_clarification", (
-        "Expected the gate to still halt, since one response (REQ-005) was insufficient"
+    assert gate_after == "proceed", (
+        "Expected the gate to proceed: REQ-005 is escalated_for_manual_review, not still "
+        "blocking — the pipeline must not get stuck forever on a response that already came "
+        "back insufficient once"
     )
     assert len(escalated) == 1 and escalated[0].id == "REQ-005", (
         "Expected exactly REQ-005 to be escalated for manual review"
     )
-    print("\n      -> Correctly distinguishes 'still needs a human' from 'needs another auto-question':")
+    print("\n      -> Correctly distinguishes 'needs a human's judgment call, downstream' from")
+    print("         'needs another auto-question before we can proceed at all':")
     print("         6 of 7 requirements auto-resolved and are now 'clear'.")
     print("         1 requirement (REQ-005) has a response on file but it didn't actually answer")
-    print("         the question — flagged for manual review rather than silently accepted or")
-    print("         auto-looped into another question.")
+    print("         the question — flagged for manual review and carried forward as an")
+    print("         assumption rather than blocking the pipeline indefinitely.")
 
     # Sanity: confirm the resolved items really did update, not just flip status blindly
     req1 = result.by_id("REQ-001")

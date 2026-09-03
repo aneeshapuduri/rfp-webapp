@@ -71,6 +71,106 @@ thanks, referencing the contact by name and title. No heading."""
     return BASE_SYSTEM, user
 
 
+def scope_of_services_prompt(clear_requirements: list[str]) -> tuple[str, str]:
+    reqs = "\n".join(f"- {r}" for r in clear_requirements)
+    user = f"""CONFIRMED REQUIREMENTS:
+{reqs}
+
+Write "Scope of Services" (150-250 words) as a bulleted list of the specific services and work
+this proposal covers, grounded directly in the requirements above. Each bullet line MUST start
+with "- ". No heading, no prose outside the bullets."""
+    return BASE_SYSTEM, user
+
+
+def out_of_scope_prompt(clear_requirements: list[str]) -> tuple[str, str]:
+    reqs = "\n".join(f"- {r}" for r in clear_requirements)
+    user = f"""CONFIRMED REQUIREMENTS:
+{reqs}
+
+Write "Out of Scope of Services" (100-200 words) as a bulleted list of related work that is
+explicitly NOT included in this proposal (e.g. hardware procurement, third-party licensing fees,
+content migration beyond what's stated, ongoing operations beyond the stated support period) —
+infer reasonable, standard exclusions for a project like this one; do not contradict anything in
+the requirements above. Each bullet line MUST start with "- ". No heading, no prose outside the
+bullets."""
+    return BASE_SYSTEM, user
+
+
+def project_objectives_prompt(project_title: str, agency: str, clear_requirements: list[str]) -> tuple[str, str]:
+    reqs = "\n".join(f"- {r}" for r in clear_requirements)
+    user = f"""PROJECT: {project_title}
+AGENCY: {agency}
+CONFIRMED REQUIREMENTS:
+{reqs}
+
+Write "Project Objectives" (120-200 words) as a bulleted list of 4-6 concrete, outcome-oriented
+objectives this project is meant to achieve for {agency}. Each bullet line MUST start with "- ".
+No heading, no prose outside the bullets."""
+    return BASE_SYSTEM, user
+
+
+def project_deliverables_prompt(clear_requirements: list[str]) -> tuple[str, str]:
+    reqs = "\n".join(f"- {r}" for r in clear_requirements)
+    user = f"""CONFIRMED REQUIREMENTS:
+{reqs}
+
+Write "Project Deliverables" (150-250 words) as a bulleted list of the concrete, tangible
+artifacts and outputs this project will produce (e.g. a deployed system, documentation,
+training materials, migrated data, source code repository). Each bullet line MUST start with
+"- ". No heading, no prose outside the bullets."""
+    return BASE_SYSTEM, user
+
+
+def staffing_readiness_prompt(clear_requirements: list[str], duration_months: float) -> tuple[str, str]:
+    reqs = "\n".join(f"- {r}" for r in clear_requirements)
+    user = f"""CONFIRMED REQUIREMENTS:
+{reqs}
+PROJECT DURATION: {duration_months} months
+
+Write "Staffing Model and Project Initiation Readiness" (120-180 words): describe how the
+proposed team is structured for this engagement and what happens in the first two weeks after
+contract award to get the project moving (kickoff, access provisioning, environment setup,
+finalized project plan). No heading."""
+    return BASE_SYSTEM, user
+
+
+def technical_assumptions_prompt(clear_requirements: list[str]) -> tuple[str, str]:
+    reqs = "\n".join(f"- {r}" for r in clear_requirements)
+    user = f"""CONFIRMED REQUIREMENTS:
+{reqs}
+
+Write "Technical Assumptions" (100-180 words) as a bulleted list of technical/infrastructure
+assumptions this proposal is based on (e.g. availability of existing systems/APIs, environment
+access, browser/device support baseline, network connectivity). Each bullet line MUST start
+with "- ". No heading, no prose outside the bullets."""
+    return BASE_SYSTEM, user
+
+
+def project_dependencies_prompt(clear_requirements: list[str]) -> tuple[str, str]:
+    reqs = "\n".join(f"- {r}" for r in clear_requirements)
+    user = f"""CONFIRMED REQUIREMENTS:
+{reqs}
+
+Write "Project Assumptions and Dependencies" (100-180 words) as a bulleted list of what this
+project depends on from the client/agency side to stay on schedule (e.g. timely stakeholder
+availability and decisions, access to subject-matter experts, environment/credential
+provisioning, third-party vendor cooperation). Each bullet line MUST start with "- ". No
+heading, no prose outside the bullets."""
+    return BASE_SYSTEM, user
+
+
+def service_boundaries_prompt(clear_requirements: list[str]) -> tuple[str, str]:
+    reqs = "\n".join(f"- {r}" for r in clear_requirements)
+    user = f"""CONFIRMED REQUIREMENTS:
+{reqs}
+
+Write "Service Boundaries and Scope Limitations" (100-180 words): describe, in plain contractual
+language, the boundaries of the committed service (e.g. supported browsers/environments, what
+counts as a defect versus a new feature request, limits on data volumes or usage covered by the
+base price). No heading."""
+    return BASE_SYSTEM, user
+
+
 COMPLIANCE_SYSTEM = """You are a senior proposal writer completing a compliance matrix — the
 most scrutinized section of a government RFP response. You MUST address every single
 requirement ID given, with no exceptions and no omissions. Missing even one requirement in a

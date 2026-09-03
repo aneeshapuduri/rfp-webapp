@@ -1,7 +1,20 @@
 """
-Phase 4: assembles the full proposal into a .docx following config/template_spec.md's
-12-section order (cover through closing), including the sections Phases 1-3 didn't cover
-directly: Assumptions, Staffing Plan, and Effort & Pricing Summary.
+Phase 4: assembles the full proposal into a .docx following template_mapper.OUR_SECTIONS'
+canonical order (cover, table of contents, then every section from Executive Summary and
+Bidder Overview through Closing Statement) — a mix of content Phases 1-4 generated
+(narrative, timeline, staffing, pricing, compliance matrix) and static content pulled
+straight from config/company_profile.json (company overview, value proposition, core
+capabilities, differentiators, partnerships, industry recognition, key personnel, SLA, etc.).
+
+Section content is produced by a registry of small renderer functions (SECTION_RENDERERS),
+one per canonical section name, each called as renderer(sink, content, company). A "sink" is
+one of two interchangeable output targets: _AppendSink writes at the current end of the
+document (used by the default no-template builder, and for template sections that couldn't be
+matched to a heading), while _InsertAfterSink writes immediately after a moving cursor anchored
+at a heading found in a client-supplied template. Renderers never need to know which sink
+they're writing to — this is what let the old 3x-duplicated per-section if/elif chains (one
+copy each in the default builder, the matched-template path, and the unmatched-append path)
+collapse into a single implementation per section.
 """
 from __future__ import annotations
 
@@ -11,6 +24,7 @@ from docx import Document
 from docx.enum.section import WD_SECTION
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
@@ -111,6 +125,43 @@ def _add_cover_page(doc: Document, project_title: str, agency: str, company: dic
     doc.add_section(WD_SECTION.NEW_PAGE)
 
 
+def _add_toc(doc: Document):
+    """Inserts a real Word Table-of-Contents field (TOC \\o "1-2" \\h \\z \\u) on its own page
+    right after the cover page. python-docx cannot compute page numbers itself, so the field
+    renders with placeholder text until opened in Word — Word normally prompts to update fields
+    on open, and it can always be refreshed manually (right-click inside it -> Update Field, or
+    select it and press F9)."""
+    doc.add_heading("Table of Contents", level=1)
+
+    paragraph = doc.add_paragraph()
+    run = paragraph.add_run()
+    r_element = run._r
+
+    fld_char_begin = OxmlElement("w:fldChar")
+    fld_char_begin.set(qn("w:fldCharType"), "begin")
+
+    instr_text = OxmlElement("w:instrText")
+    instr_text.set(qn("xml:space"), "preserve")
+    instr_text.text = 'TOC \\o "1-2" \\h \\z \\u'
+
+    fld_char_separate = OxmlElement("w:fldChar")
+    fld_char_separate.set(qn("w:fldCharType"), "separate")
+
+    placeholder = OxmlElement("w:t")
+    placeholder.text = 'Right-click here and choose "Update Field" (or select it and press F9) to generate the table of contents.'
+
+    fld_char_end = OxmlElement("w:fldChar")
+    fld_char_end.set(qn("w:fldCharType"), "end")
+
+    r_element.append(fld_char_begin)
+    r_element.append(instr_text)
+    r_element.append(fld_char_separate)
+    r_element.append(placeholder)
+    r_element.append(fld_char_end)
+
+    doc.add_section(WD_SECTION.NEW_PAGE)
+
+
 def _add_body(doc: Document, text: str):
     for raw_line in text.split("\n"):
         line = raw_line.strip()
@@ -189,125 +240,301 @@ def _insert_table_after(doc: Document, anchor_element, headers, rows, widths_in,
     return table._tbl
 
 
-def _insert_matched_section(doc: Document, our_section: str, template_heading: str, content: dict, company: dict):
-    """Inserts generated content for one of the 10 canonical sections immediately after the
-    matching heading found in the client's uploaded template. No section numbering is added
-    here — the client's own template heading is used exactly as they wrote it."""
-    anchor = _find_heading_element(doc, template_heading)
-    if anchor is None:
-        return
-    cursor = anchor
+class _AppendSink:
+    """Writes content at the current end of the document. Used by the default (no-template)
+    builder, and for sections that couldn't be confidently matched to a heading in a client's
+    uploaded template (the 'Needs Manual Placement' block)."""
 
-    if our_section == "Executive Summary":
-        cursor = _insert_body_after(doc, cursor, content["executive_summary"])
-    elif our_section == "Understanding of the Problem":
-        cursor = _insert_body_after(doc, cursor, content["understanding"])
-    elif our_section == "Technical Approach and Methodology":
-        cursor = _insert_body_after(doc, cursor, content["technology_approach"])
-    elif our_section == "Assumptions":
-        if content["assumptions"]:
-            for a in content["assumptions"]:
-                cursor = _insert_paragraph_after(doc, cursor, a, style="List Bullet")
-        else:
-            cursor = _insert_paragraph_after(
-                doc, cursor,
-                "No assumptions were required — all requirements were fully specified in the RFP.",
-            )
-    elif our_section == "Proposed Team & Staffing Plan":
-        for person in company.get("key_personnel", []):
-            cursor = _insert_paragraph_after(doc, cursor, f"{person['name']} — {person['role']}")
-            cursor = _insert_paragraph_after(doc, cursor, person.get("credentials", ""))
-            cursor = _insert_paragraph_after(doc, cursor, person.get("bio", ""))
-        staffing_rows = [
-            [l["role"], l["headcount"], l["hours_per_person"], l["total_hours"]]
-            for l in content["staffing"]
-        ]
-        cursor = _insert_table_after(doc, cursor, ["Role", "Headcount", "Hours/Person", "Total Hours"],
-                                      staffing_rows, [2.5, 1.2, 1.4, 1.4])
-    elif our_section == "Proposed Project Timeline":
-        timeline_rows = [[p["phase"], p["duration"], p["description"]] for p in content["timeline"]]
-        cursor = _insert_table_after(doc, cursor, ["Phase", "Duration", "Description"], timeline_rows,
-                                      [1.6, 1.3, 4.1])
-    elif our_section == "Effort & Pricing Summary":
-        pricing = content["pricing"]
-        pricing_rows = [
-            [l["role"], l["total_hours"], f"${l['hourly_rate']:,.2f}", f"${l['subtotal']:,.2f}"]
-            for l in pricing["lines"]
-        ]
-        cursor = _insert_table_after(doc, cursor, ["Role", "Total Hours", "Rate", "Subtotal"],
-                                      pricing_rows, [2.3, 1.3, 1.3, 1.6])
-        summary_text = (
-            f"Labor Subtotal: ${pricing['labor_subtotal']:,.2f}\n"
-            f"Contingency ({pricing['contingency_pct']}%): ${pricing['contingency_amount']:,.2f}\n"
-            f"TOTAL: ${pricing['total']:,.2f}"
+    def __init__(self, doc: Document):
+        self.doc = doc
+
+    def body(self, text: str):
+        _add_body(self.doc, text)
+
+    def bullets(self, items: list[str], empty_text: str | None = None):
+        if items:
+            for item in items:
+                self.doc.add_paragraph(item, style="List Bullet")
+        elif empty_text:
+            self.doc.add_paragraph(empty_text)
+
+    def table(self, headers, rows, widths_in, status_col=None):
+        return _add_table(self.doc, headers, rows, widths_in, status_col=status_col)
+
+    def paragraph(self, text: str = "", bold: bool = False, italic: bool = False,
+                  color: RGBColor | None = None, size: int | None = None):
+        p = self.doc.add_paragraph()
+        run = p.add_run(text)
+        run.font.bold = bold
+        run.italic = italic
+        if color is not None:
+            run.font.color.rgb = color
+        if size is not None:
+            run.font.size = Pt(size)
+        return p
+
+
+class _InsertAfterSink:
+    """Writes content immediately after a moving cursor anchored at a heading found in a
+    client-supplied template (see _insert_paragraph_after / _insert_table_after). Mirrors
+    _AppendSink's interface so a SECTION_RENDERERS function never needs to know which case
+    it's writing into."""
+
+    def __init__(self, doc: Document, anchor_element):
+        self.doc = doc
+        self.cursor = anchor_element
+
+    def body(self, text: str):
+        self.cursor = _insert_body_after(self.doc, self.cursor, text)
+
+    def bullets(self, items: list[str], empty_text: str | None = None):
+        if items:
+            for item in items:
+                self.cursor = _insert_paragraph_after(self.doc, self.cursor, item, style="List Bullet")
+        elif empty_text:
+            self.cursor = _insert_paragraph_after(self.doc, self.cursor, empty_text)
+
+    def table(self, headers, rows, widths_in, status_col=None):
+        self.cursor = _insert_table_after(self.doc, self.cursor, headers, rows, widths_in, status_col=status_col)
+        return self.cursor
+
+    def paragraph(self, text: str = "", bold: bool = False, italic: bool = False,
+                  color: RGBColor | None = None, size: int | None = None):
+        new_p = self.doc.add_paragraph()
+        run = new_p.add_run(text)
+        run.font.bold = bold
+        run.italic = italic
+        if color is not None:
+            run.font.color.rgb = color
+        if size is not None:
+            run.font.size = Pt(size)
+        self.cursor.addnext(new_p._p)
+        self.cursor = new_p._p
+        return new_p
+
+
+def _render_executive_summary(sink, content, company):
+    sink.body(content["executive_summary"])
+
+
+def _render_understanding(sink, content, company):
+    sink.body(content["understanding"])
+
+
+def _render_company_overview(sink, content, company):
+    if company.get("company_name"):
+        sink.body(
+            f"{company['company_name']} was founded in {company.get('founded_year', 'N/A')} and is "
+            f"headquartered in {company.get('hq_location', 'N/A')}, with {company.get('employee_count', 'N/A')} "
+            f"employees. {company.get('tagline', '')}"
         )
-        cursor = _insert_body_after(doc, cursor, summary_text)
-    elif our_section == "Relevant Past Performance":
-        cursor = _insert_body_after(doc, cursor, content["past_performance"])
-    elif our_section == "Compliance Matrix":
-        matrix_rows = [[m["requirement"], m["response"], m["status"]] for m in content["compliance_matrix"]]
-        cursor = _insert_table_after(doc, cursor, ["Requirement", "Our Response", "Status"], matrix_rows,
-                                      [2.3, 3.4, 1.3], status_col=2)
-    elif our_section == "Closing Statement":
-        cursor = _insert_body_after(doc, cursor, content["closing"])
+    certs = company.get("certifications", [])
+    if certs:
+        sink.bullets(certs)
+
+
+def _render_value_proposition(sink, content, company):
+    sink.body(company.get("value_proposition", ""))
+
+
+def _render_core_capabilities(sink, content, company):
+    sink.bullets(company.get("core_capabilities", []))
+
+
+def _render_technologies_and_skillsets(sink, content, company):
+    sink.bullets(company.get("technologies_and_skillsets", []))
+
+
+def _render_key_differentiators(sink, content, company):
+    sink.bullets(company.get("differentiators", []))
+
+
+def _render_partnership_list(sink, content, company):
+    partnerships = company.get("partnerships", [])
+    if not partnerships:
+        sink.body("No formal technology partnerships apply to this engagement.")
+        return
+    sink.bullets([f"{p['name']} — {p['description']}" for p in partnerships])
+
+
+def _render_industry_recognition(sink, content, company):
+    sink.bullets(
+        company.get("industry_recognition", []),
+        empty_text="No industry recognition to report at this time.",
+    )
+
+
+def _render_past_performance(sink, content, company):
+    sink.body(content["past_performance"])
+
+
+def _render_staffing_readiness(sink, content, company):
+    sink.body(content.get("staffing_readiness", ""))
+
+
+def _render_scope_of_services(sink, content, company):
+    sink.body(content.get("scope_of_services", ""))
+
+
+def _render_out_of_scope(sink, content, company):
+    sink.body(content.get("out_of_scope_of_services", ""))
+
+
+def _render_project_objectives(sink, content, company):
+    sink.body(content.get("project_objectives", ""))
+
+
+def _render_project_deliverables(sink, content, company):
+    sink.body(content.get("project_deliverables", ""))
+
+
+def _render_solution_overview(sink, content, company):
+    sink.body(content["technology_approach"])
+
+
+def _render_project_plan_milestones(sink, content, company):
+    timeline_rows = [[p["phase"], p["duration"], p["description"]] for p in content["timeline"]]
+    sink.table(["Phase", "Duration", "Description"], timeline_rows, [1.6, 1.3, 4.1])
+
+
+def _render_change_management(sink, content, company):
+    sink.body(company.get("change_management_approach", ""))
+
+
+def _render_performance_optimization(sink, content, company):
+    sink.body(company.get("performance_optimization_approach", ""))
+
+
+def _render_key_personnel(sink, content, company):
+    for person in company.get("key_personnel", []):
+        sink.paragraph(f"{person['name']} — {person['role']}", bold=True, color=NAVY)
+        sink.paragraph(person.get("credentials", ""), italic=True, color=GRAY)
+        sink.paragraph(person.get("bio", ""))
+
+
+def _render_team_staffing_plan(sink, content, company):
+    staffing_rows = [
+        [l["role"], l["headcount"], l["hours_per_person"], l["total_hours"]]
+        for l in content["staffing"]
+    ]
+    sink.table(["Role", "Headcount", "Hours/Person", "Total Hours"], staffing_rows, [2.5, 1.2, 1.4, 1.4])
+
+
+def _render_maintenance_and_support(sink, content, company):
+    sink.body(company.get("maintenance_and_support", ""))
+
+
+def _render_operating_support_model(sink, content, company):
+    sink.body(company.get("operating_support_model", ""))
+
+
+def _render_technical_assumptions(sink, content, company):
+    sink.body(content.get("technical_assumptions", ""))
+
+
+def _render_general_assumptions(sink, content, company):
+    sink.bullets(
+        content["assumptions"],
+        empty_text="No assumptions were required — all requirements were fully specified in the RFP.",
+    )
+
+
+def _render_project_dependencies(sink, content, company):
+    sink.body(content.get("project_dependencies", ""))
+
+
+def _render_pricing_summary(sink, content, company):
+    pricing = content["pricing"]
+    pricing_rows = [
+        [l["role"], l["total_hours"], f"${l['hourly_rate']:,.2f}", f"${l['subtotal']:,.2f}"]
+        for l in pricing["lines"]
+    ]
+    sink.table(["Role", "Total Hours", "Rate", "Subtotal"], pricing_rows, [2.3, 1.3, 1.3, 1.6])
+    sink.paragraph(f"Labor Subtotal: ${pricing['labor_subtotal']:,.2f}")
+    sink.paragraph(f"Contingency ({pricing['contingency_pct']}%): ${pricing['contingency_amount']:,.2f}")
+    sink.paragraph(f"TOTAL: ${pricing['total']:,.2f}", bold=True, size=13, color=NAVY)
+
+
+def _render_sla(sink, content, company):
+    sla_rows = [[s["severity"], s["response_time"], s["resolution_time"]] for s in company.get("sla_default", [])]
+    if sla_rows:
+        sink.table(["Severity", "Response Time", "Resolution Time"], sla_rows, [2.6, 1.9, 1.9])
+    else:
+        sink.body("Service levels will be finalized in the executed agreement.")
+
+
+def _render_service_boundaries(sink, content, company):
+    sink.body(content.get("service_boundaries", ""))
+
+
+def _render_compliance_matrix(sink, content, company):
+    matrix_rows = [[m["requirement"], m["response"], m["status"]] for m in content["compliance_matrix"]]
+    sink.table(["Requirement", "Our Response", "Status"], matrix_rows, [2.3, 3.4, 1.3], status_col=2)
+
+
+def _render_closing(sink, content, company):
+    sink.body(content["closing"])
+
+
+# One renderer per canonical section in template_mapper.OUR_SECTIONS. A renderer is called as
+# renderer(sink, content, company) and writes that section's body content through the sink —
+# it never adds the section's own heading (the caller does, since a matched-in-template section
+# reuses the heading already present in the client's document) and never needs to know whether
+# it's appending at the document's end or inserting after a cursor in the middle of one.
+SECTION_RENDERERS = {
+    "Executive Summary and Bidder Overview": _render_executive_summary,
+    "Understanding of the Problem": _render_understanding,
+    "Company Overview": _render_company_overview,
+    "Company Value Proposition": _render_value_proposition,
+    "Core Capabilities": _render_core_capabilities,
+    "Technologies and Skillsets": _render_technologies_and_skillsets,
+    "Company's Key Differentiators": _render_key_differentiators,
+    "Partnership List": _render_partnership_list,
+    "Industry Recognition": _render_industry_recognition,
+    "Relevant Past Performance": _render_past_performance,
+    "Staffing Model and Project Initiation Readiness": _render_staffing_readiness,
+    "Scope of Services": _render_scope_of_services,
+    "Out of Scope of Services": _render_out_of_scope,
+    "Project Objectives": _render_project_objectives,
+    "Project Deliverables": _render_project_deliverables,
+    "High-Level Solution Overview": _render_solution_overview,
+    "Project Plan and Milestones": _render_project_plan_milestones,
+    "Project Change Management": _render_change_management,
+    "Performance Optimization Approach": _render_performance_optimization,
+    "Key Personnel": _render_key_personnel,
+    "Proposed Team & Staffing Plan": _render_team_staffing_plan,
+    "Maintenance and Support": _render_maintenance_and_support,
+    "Operating Support Model": _render_operating_support_model,
+    "Technical Assumptions": _render_technical_assumptions,
+    "General Assumptions": _render_general_assumptions,
+    "Project Assumptions and Dependencies": _render_project_dependencies,
+    "Effort & Pricing Summary": _render_pricing_summary,
+    "Service Level Agreement (SLA)": _render_sla,
+    "Service Boundaries and Scope Limitations": _render_service_boundaries,
+    "Compliance Matrix": _render_compliance_matrix,
+    "Closing Statement": _render_closing,
+}
+
+
+def _insert_matched_section(doc: Document, our_section: str, template_heading: str, content: dict, company: dict):
+    """Inserts generated content for a canonical section immediately after the matching heading
+    found in the client's uploaded template. No section numbering is added here — the client's
+    own template heading is used exactly as they wrote it."""
+    anchor = _find_heading_element(doc, template_heading)
+    renderer = SECTION_RENDERERS.get(our_section)
+    if anchor is None or renderer is None:
+        return
+    renderer(_InsertAfterSink(doc, anchor), content, company)
 
 
 def _append_section_content(doc: Document, our_section: str, content: dict, company: dict):
     """Same section content as _insert_matched_section, but appended normally at the end of the
     document — used for sections that couldn't be confidently matched to a heading in the
     client's template (see the 'Needs Manual Placement' block in build_final_proposal)."""
-    if our_section == "Executive Summary":
-        _add_body(doc, content["executive_summary"])
-    elif our_section == "Understanding of the Problem":
-        _add_body(doc, content["understanding"])
-    elif our_section == "Technical Approach and Methodology":
-        _add_body(doc, content["technology_approach"])
-    elif our_section == "Assumptions":
-        if content["assumptions"]:
-            for a in content["assumptions"]:
-                doc.add_paragraph(a, style="List Bullet")
-        else:
-            doc.add_paragraph("No assumptions were required — all requirements were fully specified in the RFP.")
-    elif our_section == "Proposed Team & Staffing Plan":
-        for person in company.get("key_personnel", []):
-            p = doc.add_paragraph()
-            run = p.add_run(f"{person['name']} — {person['role']}")
-            run.font.bold = True
-            run.font.color.rgb = NAVY
-            cred = doc.add_paragraph()
-            cred_run = cred.add_run(person.get("credentials", ""))
-            cred_run.italic = True
-            cred_run.font.color.rgb = GRAY
-            doc.add_paragraph(person.get("bio", ""))
-        staffing_rows = [
-            [l["role"], l["headcount"], l["hours_per_person"], l["total_hours"]]
-            for l in content["staffing"]
-        ]
-        _add_table(doc, ["Role", "Headcount", "Hours/Person", "Total Hours"], staffing_rows, [2.5, 1.2, 1.4, 1.4])
-    elif our_section == "Proposed Project Timeline":
-        timeline_rows = [[p["phase"], p["duration"], p["description"]] for p in content["timeline"]]
-        _add_table(doc, ["Phase", "Duration", "Description"], timeline_rows, [1.6, 1.3, 4.1])
-    elif our_section == "Effort & Pricing Summary":
-        pricing = content["pricing"]
-        pricing_rows = [
-            [l["role"], l["total_hours"], f"${l['hourly_rate']:,.2f}", f"${l['subtotal']:,.2f}"]
-            for l in pricing["lines"]
-        ]
-        _add_table(doc, ["Role", "Total Hours", "Rate", "Subtotal"], pricing_rows, [2.3, 1.3, 1.3, 1.6])
-        summary_p = doc.add_paragraph()
-        summary_p.add_run(f"Labor Subtotal: ${pricing['labor_subtotal']:,.2f}\n")
-        summary_p.add_run(f"Contingency ({pricing['contingency_pct']}%): ${pricing['contingency_amount']:,.2f}\n")
-        total_run = summary_p.add_run(f"TOTAL: ${pricing['total']:,.2f}")
-        total_run.bold = True
-        total_run.font.size = Pt(13)
-        total_run.font.color.rgb = NAVY
-    elif our_section == "Relevant Past Performance":
-        _add_body(doc, content["past_performance"])
-    elif our_section == "Compliance Matrix":
-        matrix_rows = [[m["requirement"], m["response"], m["status"]] for m in content["compliance_matrix"]]
-        _add_table(doc, ["Requirement", "Our Response", "Status"], matrix_rows, [2.3, 3.4, 1.3], status_col=2)
-    elif our_section == "Closing Statement":
-        _add_body(doc, content["closing"])
+    renderer = SECTION_RENDERERS.get(our_section)
+    if renderer is None:
+        return
+    renderer(_AppendSink(doc), content, company)
 
 
 def _build_final_proposal_with_template(output_path: str, content: dict, template_path: str,
@@ -316,9 +543,9 @@ def _build_final_proposal_with_template(output_path: str, content: dict, templat
     fresh document — deliberately does NOT call _style_base or _add_cover_page or _add_footer:
     the whole point of a custom template is to keep the client's own styling and cover/branding
     intact, so this only ever inserts new content, never restyles or replaces what's already
-    there. Any of the 10 canonical sections template_mapper couldn't confidently match to a
-    heading in the template are appended at the end under a 'Needs Manual Placement' heading
-    instead of being silently dropped."""
+    there. Any canonical section template_mapper couldn't confidently match to a heading in the
+    template is appended at the end under a 'Needs Manual Placement' heading instead of being
+    silently dropped."""
     company = content["company"]
     doc = Document(template_path)
 
@@ -358,80 +585,15 @@ def build_final_proposal(output_path: str, content: dict, template_path: str | N
     doc = Document()
     _style_base(doc)
     _add_cover_page(doc, content["project_title"], content["agency"], company)
+    _add_toc(doc)
     _add_footer(doc, content["project_title"])
 
-    doc.add_heading("1. Executive Summary", level=1)
-    _add_body(doc, content["executive_summary"])
-
-    doc.add_heading("2. Understanding of the Problem", level=1)
-    _add_body(doc, content["understanding"])
-
-    doc.add_heading("3. Technical Approach and Methodology", level=1)
-    _add_body(doc, content["technology_approach"])
-
-    doc.add_heading("4. Assumptions", level=1)
-    if content["assumptions"]:
-        for a in content["assumptions"]:
-            doc.add_paragraph(a, style="List Bullet")
-    else:
-        doc.add_paragraph("No assumptions were required — all requirements were fully specified in the RFP.")
-
-    doc.add_heading("5. Proposed Team & Staffing Plan", level=1)
-    if company.get("key_personnel"):
-        for person in company["key_personnel"]:
-            p = doc.add_paragraph()
-            run = p.add_run(f"{person['name']} — {person['role']}")
-            run.font.bold = True
-            run.font.color.rgb = NAVY
-            cred = doc.add_paragraph()
-            cred_run = cred.add_run(person["credentials"])
-            cred_run.italic = True
-            cred_run.font.color.rgb = GRAY
-            doc.add_paragraph(person["bio"])
-    doc.add_paragraph()
-    staffing_rows = [
-        [l["role"], l["headcount"], l["hours_per_person"], l["total_hours"]]
-        for l in content["staffing"]
-    ]
-    _add_table(doc, ["Role", "Headcount", "Hours/Person", "Total Hours"], staffing_rows,
-               [2.5, 1.2, 1.4, 1.4])
-
-    doc.add_heading("6. Proposed Project Timeline", level=1)
-    timeline_rows = [[p["phase"], p["duration"], p["description"]] for p in content["timeline"]]
-    _add_table(doc, ["Phase", "Duration", "Description"], timeline_rows, [1.6, 1.3, 4.1])
-
-    doc.add_heading("7. Effort & Pricing Summary", level=1)
-    note = doc.add_paragraph()
-    note.add_run(
-        "Pricing below reflects competitive market-rate estimates for internal review prior "
-        "to submission."
-    ).italic = True
-    pricing = content["pricing"]
-    pricing_rows = [
-        [l["role"], l["total_hours"], f"${l['hourly_rate']:,.2f}", f"${l['subtotal']:,.2f}"]
-        for l in pricing["lines"]
-    ]
-    _add_table(doc, ["Role", "Total Hours", "Rate", "Subtotal"], pricing_rows, [2.3, 1.3, 1.3, 1.6])
-    doc.add_paragraph()
-    summary_p = doc.add_paragraph()
-    summary_p.add_run(f"Labor Subtotal: ${pricing['labor_subtotal']:,.2f}\n").bold = False
-    summary_p.add_run(f"Contingency ({pricing['contingency_pct']}%): ${pricing['contingency_amount']:,.2f}\n")
-    total_run = summary_p.add_run(f"TOTAL: ${pricing['total']:,.2f}")
-    total_run.bold = True
-    total_run.font.size = Pt(13)
-    total_run.font.color.rgb = NAVY
-
-    doc.add_heading("8. Relevant Past Performance", level=1)
-    _add_body(doc, content["past_performance"])
-
-    doc.add_heading("9. Compliance Matrix", level=1)
-    matrix_rows = [
-        [m["requirement"], m["response"], m["status"]] for m in content["compliance_matrix"]
-    ]
-    _add_table(doc, ["Requirement", "Our Response", "Status"], matrix_rows, [2.3, 3.4, 1.3], status_col=2)
-
-    doc.add_heading("10. Closing Statement", level=1)
-    _add_body(doc, content["closing"])
+    sink = _AppendSink(doc)
+    for i, section in enumerate(OUR_SECTIONS, start=1):
+        doc.add_heading(f"{i}. {section}", level=1)
+        renderer = SECTION_RENDERERS.get(section)
+        if renderer is not None:
+            renderer(sink, content, company)
 
     contact = company.get("contact", {})
     if contact:
