@@ -78,7 +78,7 @@
             <div class="status-panel__title">In progress</div>
             <div class="status-panel__text">
                 {% if project.status == "Analyzing" %}The bid invitation is being read and every requirement extracted right now.{% else %}The client's responses are being applied and the proposal is being assembled right now.{% endif %}
-                This page updates automatically — refresh any time to check.
+                This page checks every few seconds and reloads on its own the moment that finishes — no need to refresh.
             </div>
         </div>
 
@@ -132,6 +132,15 @@
                     <button type="submit" class="btn-danger">Cancel</button>
                 </form>
             </div>
+        </div>
+
+        {% elif project.status == "Awaiting Preview" and generating %}
+        <span class="status-panel__icon status-panel__icon--busy spin" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9"/></svg>
+        </span>
+        <div>
+            <div class="status-panel__title">Generating your final document&hellip;</div>
+            <div class="status-panel__text">Building the proposal document now — this page will reload on its own the moment it's ready.</div>
         </div>
 
         {% elif project.status == "Awaiting Preview" %}
@@ -373,6 +382,42 @@
                 <textarea id="closing" name="closing" rows="4" style="width:100%;">{{ preview_content.closing }}</textarea>
             </div>
 
+            <details>
+                <summary>Additional project-specific sections (scope, objectives, staffing readiness, assumptions, support, and more)</summary>
+                <div class="form-field">
+                    <label for="scope_of_services">Scope of Services</label>
+                    <textarea id="scope_of_services" name="scope_of_services" rows="4" style="width:100%;">{{ preview_content.scope_of_services }}</textarea>
+                </div>
+                <div class="form-field">
+                    <label for="out_of_scope_of_services">Out of Scope of Services</label>
+                    <textarea id="out_of_scope_of_services" name="out_of_scope_of_services" rows="4" style="width:100%;">{{ preview_content.out_of_scope_of_services }}</textarea>
+                </div>
+                <div class="form-field">
+                    <label for="project_objectives">Project Objectives</label>
+                    <textarea id="project_objectives" name="project_objectives" rows="4" style="width:100%;">{{ preview_content.project_objectives }}</textarea>
+                </div>
+                <div class="form-field">
+                    <label for="project_deliverables">Project Deliverables</label>
+                    <textarea id="project_deliverables" name="project_deliverables" rows="4" style="width:100%;">{{ preview_content.project_deliverables }}</textarea>
+                </div>
+                <div class="form-field">
+                    <label for="staffing_readiness">Staffing Model and Project Initiation Readiness</label>
+                    <textarea id="staffing_readiness" name="staffing_readiness" rows="4" style="width:100%;">{{ preview_content.staffing_readiness }}</textarea>
+                </div>
+                <div class="form-field">
+                    <label for="technical_assumptions">Technical Assumptions</label>
+                    <textarea id="technical_assumptions" name="technical_assumptions" rows="4" style="width:100%;">{{ preview_content.technical_assumptions }}</textarea>
+                </div>
+                <div class="form-field">
+                    <label for="project_dependencies">Project Assumptions and Dependencies</label>
+                    <textarea id="project_dependencies" name="project_dependencies" rows="4" style="width:100%;">{{ preview_content.project_dependencies }}</textarea>
+                </div>
+                <div class="form-field">
+                    <label for="service_boundaries">Service Boundaries and Scope Limitations</label>
+                    <textarea id="service_boundaries" name="service_boundaries" rows="4" style="width:100%;">{{ preview_content.service_boundaries }}</textarea>
+                </div>
+            </details>
+
             <h3>Proposed Team &amp; Staffing Plan</h3>
             <input type="hidden" name="staffing_row_count" value="{{ preview_content.staffing | length }}">
             <table class="requirements-table">
@@ -437,7 +482,18 @@
                 <p class="coverage-note">We'll match your template's headings to our standard sections and insert generated content under each. Any section we can't confidently match will be added at the end under "Needs Manual Placement."</p>
             </div>
 
-            <button type="submit" class="btn-primary" onclick="return confirm('Generate the final document with these edits?');">Generate Final Document</button>
+            <h3>Preview in Document Format</h3>
+            <div class="form-field">
+                <p class="coverage-note" style="margin-top:0;">Download the proposal exactly as it will be generated — using the edits above and your selected template, including any extra sections it needs — to review or edit directly in Word. Then either come back and click "Generate Final Bid" to use the edits above, or upload your edited copy below to use it as the final bid exactly as you edited it.</p>
+                <button type="submit" formaction="/projects/{{ project.id }}/preview/document" formnovalidate class="btn-ghost">Download Preview Document (.docx)</button>
+            </div>
+            <div class="form-field">
+                <label for="final_document">Or upload your edited document to use as the final bid (optional)</label>
+                <input type="file" id="final_document" name="final_document" accept=".docx">
+                <p class="coverage-note">If you upload an edited document here, it's used as the final bid exactly as-is — the template choice and edits above are ignored for this submission.</p>
+            </div>
+
+            <button type="submit" class="btn-primary" onclick="return confirm('Generate the final bid? If you uploaded an edited document above, that will be used as-is; otherwise the final document is built from the edits on this page.');">Generate Final Bid</button>
         </form>
     </div>
 </div>
@@ -538,4 +594,26 @@
         <button type="submit" class="btn-danger">Delete Project</button>
     </form>
 </section>
+
+{% if project.status in ("Analyzing", "Responses Pending") or (project.status == "Awaiting Preview" and generating) %}
+<script>
+(function () {
+    // Polls the tiny JSON status endpoint every few seconds so this page reflects a status
+    // change (or a new error) on its own — no manual refresh needed while processing runs.
+    var initialStatus = "{{ project.status }}";
+    var pollUrl = "/projects/{{ project.id }}/status";
+    var timer = setInterval(function () {
+        fetch(pollUrl, { credentials: "same-origin" })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) {
+                if (data && (data.status !== initialStatus || data.has_error)) {
+                    clearInterval(timer);
+                    location.reload();
+                }
+            })
+            .catch(function () { /* network hiccup — the next tick tries again */ });
+    }, 4000);
+})();
+</script>
+{% endif %}
 {% endblock %}
