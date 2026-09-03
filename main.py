@@ -12,7 +12,11 @@ Routes:
                                        Project page just re-renders with an inline error), then
                                        creates the project + kicks off the background pipeline
   GET  /projects/{id}                 project detail view
-  POST /projects/{id}/responses       upload filled-in client responses, resumes pipeline
+  POST /projects/{id}/responses       upload a filled-in clarification doc to auto-fill the
+                                       per-question response boxes below (does not apply anything
+                                       by itself — review/edit, then submit)
+  POST /projects/{id}/responses/submit  apply whatever's in the per-question response boxes
+                                       (typed by hand and/or auto-filled) and resume the pipeline
   GET  /projects/{id}/documents/{did} download a document
   POST /projects/{id}/reupload        re-upload after a 'Not a Bid Document' halt — kept as a
                                        defensive fallback, but currently unreachable in practice:
@@ -57,11 +61,15 @@ import storage
 from pipeline_runner import (
     DEMO_MODE,
     check_document_validity,
+    extract_client_responses,
     finalize_proposal,
-    process_client_responses,
+    process_manual_responses,
     process_new_upload,
     recompute_staffing_and_pricing,
 )
+# pipeline_runner's import above already inserts the pipeline/ package dir onto sys.path, so
+# this resolves the same way it does inside pipeline_runner.py itself.
+from pipeline.schema import Phase1Result
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -350,6 +358,20 @@ def project_detail(request: Request, project_id: str):
 
     assumption_items = [r for r in requirements if r["status"] == "assumption_needed"]
 
+    # Every currently-open clarification question gets its own text box on the page: one group
+    # that's still actively blocking the pipeline (needs an answer before it can continue) and
+    # one group that's already been escalated for manual review (a previous answer was judged
+    # insufficient — it no longer blocks automatic progress, but the user can still revise it).
+    # See Phase1Result.get_blocking() in pipeline/schema.py for the exact same split used
+    # server-side to decide whether the pipeline can actually proceed.
+    open_clarification_items = [r for r in requirements if r["status"] == "ambiguous"]
+    blocking_clarification_items = [r for r in open_clarification_items if not r.get("escalated_for_manual_review")]
+    escalated_clarification_items = [r for r in open_clarification_items if r.get("escalated_for_manual_review")]
+
+    pending_responses = {}
+    if project.get("pending_client_responses_json"):
+        pending_responses = json.loads(project["pending_client_responses_json"])
+
     capability_fit = None
     if project.get("capability_fit_json"):
         capability_fit = json.loads(project["capability_fit_json"])
@@ -369,6 +391,11 @@ def project_detail(request: Request, project_id: str):
         documents=documents,
         requirements=requirements,
         assumption_items=assumption_items,
+        open_clarification_items=open_clarification_items,
+        blocking_clarification_items=blocking_clarification_items,
+        escalated_clarification_items=escalated_clarification_items,
+        pending_responses=pending_responses,
+        no_answers_found=request.query_params.get("no_answers_found") == "1",
         capability_fit=capability_fit,
         compliance_matrix=compliance_matrix,
         pricing=pricing,
@@ -380,13 +407,22 @@ def project_detail(request: Request, project_id: str):
 @app.post("/projects/{project_id}/responses")
 async def upload_responses(
     request: Request,
-    background_tasks: BackgroundTasks,
     project_id: str,
     responses_file: UploadFile = File(...),
     _: None = Depends(auth.verify_csrf),
 ):
+    """Auto-fill step only: parses an uploaded filled-in clarification doc and stages whatever
+    answers it found into pending_client_responses_json, so they show up pre-filled in the
+    per-question text boxes on the project page below. Nothing is applied to the pipeline here —
+    the user reviews (and can edit) the pre-filled text, then uses "Submit Responses & Resume"
+    (submit_client_responses below) to actually continue. This replaced the old behavior of
+    applying the doc immediately on upload, which gave the user no chance to see or correct what
+    was about to be submitted, and no clear explanation when a submission didn't move things
+    forward."""
     user = auth.current_user(request)
     project = _get_project_or_403(project_id, user)
+    if project["status"] not in ("Clarifications Sent", "Responses Pending"):
+        raise HTTPException(400, "This project isn't waiting on clarification responses.")
 
     try:
         content = await _read_capped(responses_file, storage.MAX_UPLOAD_BYTES)
@@ -400,10 +436,64 @@ async def upload_responses(
         project_id, f"responses_{responses_file.filename}", content
     )
     db.add_document(project_id, "client_responses", display_name, stored_path, encrypted)
-    db.log_action("responses_uploaded", project_id, {"filename": display_name}, user_identity=user["username"])
 
-    db.update_project(project_id, status="Responses Pending")
-    background_tasks.add_task(process_client_responses, project_id, content)
+    try:
+        extracted = extract_client_responses(project_id, content)
+    except Exception:
+        logging.getLogger("rfp_agent").exception(
+            "Failed to auto-fill clarification responses from an uploaded document"
+        )
+        extracted = {}
+
+    db.update_project(project_id, pending_client_responses_json=json.dumps(extracted))
+    db.log_action(
+        "responses_autofetched", project_id,
+        {"filename": display_name, "matched_count": len(extracted)},
+        user_identity=user["username"],
+    )
+
+    suffix = "" if extracted else "?no_answers_found=1"
+    return RedirectResponse(f"/projects/{project_id}{suffix}", status_code=303)
+
+
+@app.post("/projects/{project_id}/responses/submit")
+async def submit_client_responses(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    project_id: str,
+    _: None = Depends(auth.verify_csrf),
+):
+    """The actual clarification-response submission — reads whatever is currently in each
+    question's text box (typed by hand, auto-filled from an uploaded doc via upload_responses
+    above, or a previous answer being revised) and applies it. Every currently-open question
+    (ambiguous, whether already escalated or not) gets its own text box on the project page, so
+    this reads response_<requirement_id> fields rather than re-parsing any document."""
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if project["status"] not in ("Clarifications Sent", "Responses Pending"):
+        raise HTTPException(400, "This project isn't waiting on clarification responses.")
+    if not project.get("phase1_result_json"):
+        raise HTTPException(400, "No extracted requirements found for this project.")
+
+    form = await request.form()
+    result = Phase1Result.from_dict(json.loads(project["phase1_result_json"]))
+    open_items = [r for r in result.requirements if r.status == "ambiguous"]
+
+    responses: dict[str, str] = {}
+    for item in open_items:
+        val = form.get(f"response_{item.id}")
+        if val is not None and str(val).strip():
+            responses[item.id] = str(val).strip()
+
+    if not responses:
+        raise HTTPException(400, "Enter at least one response before submitting.")
+
+    db.log_action(
+        "responses_submitted", project_id, {"answered_count": len(responses)},
+        user_identity=user["username"],
+    )
+    db.update_project(project_id, status="Responses Pending", pending_client_responses_json=None)
+    background_tasks.add_task(process_manual_responses, project_id, responses)
 
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 

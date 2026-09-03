@@ -267,59 +267,84 @@ def _config_path(name: str):
     return pathlib.Path(__file__).resolve().parent / "config" / name
 
 
-def process_client_responses(project_id: str, content: bytes):
-    """Entry point when the bid team uploads the client's filled-in clarification responses.
-    Takes raw bytes (always a .docx) instead of a path for the same reason as
-    process_new_upload — no persistent plaintext copy."""
-    try:
-        project = db.get_project(project_id)
-        result = Phase1Result.from_raw(
-            project["name"], project["agency"],
-            [dict(r) for r in json.loads(project["phase1_result_json"])["requirements"]],
-        )
-        # Restore full field set (from_raw only sets a subset) by overlaying saved state.
-        saved = json.loads(project["phase1_result_json"])
-        for item, saved_item in zip(result.requirements, saved["requirements"]):
-            item.status = saved_item["status"]
-            item.escalated_for_manual_review = saved_item.get("escalated_for_manual_review", False)
+def extract_client_responses(project_id: str, content: bytes) -> dict[str, str]:
+    """Parses an uploaded filled-in clarification doc into {requirement_id: answer_text},
+    using the sidecar Q# -> requirement_id mapping saved when the doc was generated. Does NOT
+    apply anything to the pipeline — this only extracts, so main.py can use it to pre-fill the
+    per-question text boxes on the project page for the user to review (and edit) before
+    actually submitting anything. Takes raw bytes instead of a path for the same reason as
+    process_new_upload — no persistent plaintext copy of the client's document."""
+    project = db.get_project(project_id)
+    mapping = json.loads(project["clarification_mapping_json"])
 
-        mapping = json.loads(project["clarification_mapping_json"])
-
-        def _read_responses(path):
-            # The mapping file is small, app-generated JSON — write/delete it alongside the
-            # temp docx rather than leaving a copy in the generated/ directory permanently.
-            fd, mapping_path = tempfile.mkstemp(suffix=".json")
+    def _read_responses(path):
+        # The mapping file is small, app-generated JSON — write/delete it alongside the
+        # temp docx rather than leaving a copy in the generated/ directory permanently.
+        fd, mapping_path = tempfile.mkstemp(suffix=".json")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(mapping, f)
+            return read_client_responses(path, mapping_path)
+        finally:
             try:
-                with os.fdopen(fd, "w") as f:
-                    json.dump(mapping, f)
-                return read_client_responses(path, mapping_path)
-            finally:
-                try:
-                    os.unlink(mapping_path)
-                except OSError:
-                    pass
+                os.unlink(mapping_path)
+            except OSError:
+                pass
 
-        responses = _read_upload_via_temp_file(content, ".docx", _read_responses)
-        db.log_action("client_responses_received", project_id, {"answered_count": len(responses)})
+    return _read_upload_via_temp_file(content, ".docx", _read_responses)
 
-        client = _get_client()
-        if client is None and DEMO_MODE:
-            from pipeline.test_phase2 import DEMO_RESOLUTIONS
-            result = resolve_with_responses(result, responses, client=None, demo_resolutions=DEMO_RESOLUTIONS)
-        elif client is None:
-            raise _no_client_error()
-        else:
-            result = resolve_with_responses(result, responses, client=client)
 
-        db.update_project(project_id, phase1_result_json=json.dumps(result.to_dict()))
+def _apply_client_responses(project_id: str, responses: dict[str, str]):
+    """Shared by process_client_responses (legacy docx-upload path, still used for auditing the
+    original file) and process_manual_responses (the per-question web form, now the primary way
+    to resume): applies client answers to the still-ambiguous requirements, re-checks the
+    pipeline gate, and either proceeds to Phase 3/4 or reports back exactly which questions are
+    still blocking — see Phase1Result.get_blocking() for what "still blocking" means now that
+    escalated items no longer loop forever."""
+    project = db.get_project(project_id)
+    result = Phase1Result.from_dict(json.loads(project["phase1_result_json"]))
+    db.log_action("client_responses_received", project_id, {"answered_count": len(responses)})
 
-        if result.pipeline_decision == "halt_for_clarification":
-            escalated = result.get_escalated()
-            db.update_project(project_id, status="Clarifications Sent")
-            db.log_action("responses_insufficient", project_id, {"escalated": [r.id for r in escalated]})
-        else:
-            _run_phase3_and_4(project_id, result, client, demo_case="lakeview" if client is None else None)
+    client = _get_client()
+    if client is None and DEMO_MODE:
+        from pipeline.test_phase2 import DEMO_RESOLUTIONS
+        result = resolve_with_responses(result, responses, client=None, demo_resolutions=DEMO_RESOLUTIONS)
+    elif client is None:
+        raise _no_client_error()
+    else:
+        result = resolve_with_responses(result, responses, client=client)
 
+    db.update_project(project_id, phase1_result_json=json.dumps(result.to_dict()))
+
+    if result.pipeline_decision == "halt_for_clarification":
+        blocking = result.get_blocking()
+        db.update_project(project_id, status="Clarifications Sent")
+        db.log_action("responses_insufficient", project_id, {"still_blocking": [r.id for r in blocking]})
+    else:
+        _run_phase3_and_4(project_id, result, client, demo_case="lakeview" if client is None else None)
+
+
+def process_client_responses(project_id: str, content: bytes):
+    """Entry point when the bid team uploads the client's filled-in clarification responses
+    directly (bypassing the manual review step) — kept for any caller that still wants the old
+    upload-and-immediately-apply behavior. The web app's own upload_responses route no longer
+    calls this; it uses extract_client_responses() to pre-fill the review form instead, and
+    process_manual_responses() below to actually apply what the user confirmed."""
+    try:
+        responses = extract_client_responses(project_id, content)
+        _apply_client_responses(project_id, responses)
+    except Exception as e:  # noqa: BLE001
+        _record_failure(project_id, "responses", e)
+
+
+def process_manual_responses(project_id: str, responses: dict[str, str]):
+    """Entry point for the per-question web form on the project page (POST
+    /projects/{id}/responses/submit) — the primary way clarification responses are resumed now.
+    `responses` is already a plain {requirement_id: answer_text} dict assembled directly from
+    the submitted form fields, whether the user typed them by hand or they were auto-filled from
+    an uploaded doc via extract_client_responses() and then reviewed."""
+    try:
+        _apply_client_responses(project_id, responses)
     except Exception as e:  # noqa: BLE001
         _record_failure(project_id, "responses", e)
 

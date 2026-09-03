@@ -123,6 +123,11 @@ _MIGRATIONS = [
     ("documents", "encrypted", "INTEGER NOT NULL DEFAULT 0"),
     ("projects", "template_choice", "TEXT"),
     ("projects", "validity_rejection_reason", "TEXT"),
+    # Staged, not-yet-applied client answers — populated when a filled-in clarification doc is
+    # uploaded, so its answers can pre-fill the per-question text boxes on the project page for
+    # review/editing before the user explicitly submits them (see main.py's upload_responses and
+    # submit_client_responses routes). Cleared once submitted.
+    ("projects", "pending_client_responses_json", "TEXT"),
 ]
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
