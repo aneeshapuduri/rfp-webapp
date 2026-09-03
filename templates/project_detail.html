@@ -200,6 +200,19 @@
 {% if project.error_message %}
 <div class="alert alert-error" role="alert" style="margin-top:20px;">
     <div><strong>Something went wrong during processing:</strong><pre>{{ project.error_message }}</pre></div>
+    {% if project.status == "Analyzing" %}
+    <div style="margin-top:12px;">
+        <form action="/projects/{{ project.id }}/retry" method="post" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-primary">Retry Processing</button>
+        </form>
+        <span style="margin-left:8px; color:var(--text-muted, #666); font-size:0.9em;">
+            Most failures here are a temporary hiccup from the AI provider (for example, a
+            rate limit) rather than a problem with your document — retrying re-runs analysis
+            on the same uploaded file, no re-upload needed.
+        </span>
+    </div>
+    {% endif %}
 </div>
 {% endif %}
 
