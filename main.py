@@ -19,6 +19,10 @@ Routes:
   POST /projects/{id}/responses/submit  apply whatever's in the per-question response boxes
                                        (typed by hand and/or auto-filled) and resume the pipeline
   GET  /projects/{id}/documents/{did} download a document
+  POST /projects/{id}/retry           re-run Phase 1 from scratch on the already-uploaded bid
+                                       document after a processing failure — only from
+                                       'Analyzing' + error_message set (a transient LLM
+                                       provider error, e.g. a rate limit, is the common case)
   POST /projects/{id}/reupload        re-upload after a 'Not a Bid Document' halt — kept as a
                                        defensive fallback, but currently unreachable in practice:
                                        since POST /projects now rejects invalid documents before
@@ -624,6 +628,35 @@ async def reupload_bid_document(
         phase1_result_json=None,
         capability_fit_json=None,
     )
+    background_tasks.add_task(process_new_upload, project_id, content, extension)
+
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+@app.post("/projects/{project_id}/retry")
+def retry_processing(request: Request, background_tasks: BackgroundTasks, project_id: str,
+                      _: None = Depends(auth.verify_csrf)):
+    """Re-runs Phase 1 from scratch on the already-uploaded bid document after a processing
+    failure — no re-upload needed. Only offered from 'Analyzing' + error_message set, which is
+    the one failure state with no other way back into the pipeline (unlike a failure during the
+    clarification-response or preview/generate steps, where the existing form on the page can
+    just be resubmitted). Most failures here are a transient LLM provider hiccup (e.g. a Gemini
+    free-tier rate limit that clears within a minute) rather than anything wrong with the
+    uploaded document itself, so simply trying again is usually all that's needed."""
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if project["status"] != "Analyzing" or not project.get("error_message"):
+        raise HTTPException(400, "This project doesn't have a processing error to retry.")
+
+    bid_docs = [d for d in db.list_documents(project_id) if d["doc_type"] == "bid_invitation"]
+    if not bid_docs:
+        raise HTTPException(400, "The original bid document could not be found — please start a new project.")
+    bid_doc = bid_docs[0]  # list_documents orders by uploaded_at DESC, so [0] is the most recent
+    content = storage.read_file_bytes(bid_doc["storage_path"], bool(bid_doc["encrypted"]))
+    extension = pathlib.Path(bid_doc["filename"]).suffix.lower()
+
+    db.log_action("project_retry", project_id, {"filename": bid_doc["filename"]}, user_identity=user["username"])
+    db.update_project(project_id, status="Analyzing", error_message=None)
     background_tasks.add_task(process_new_upload, project_id, content, extension)
 
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
