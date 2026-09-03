@@ -127,12 +127,36 @@ def _read_upload_via_temp_file(content: bytes, extension: str, reader):
             pass
 
 
-def process_new_upload(project_id: str, content: bytes, extension: str):
+def check_document_validity(content: bytes, extension: str) -> DocumentValidityResult | None:
+    """Synchronous, pre-project-creation bid-document check. Called directly from main.py's
+    POST /projects route (not as a background task) so the uploader gets an immediate answer on
+    the same page — instead of the old flow, where the check only ran inside the
+    process_new_upload background task, so a rejected upload silently sat as a permanent
+    'Not a Bid Document' row the user only discovered by revisiting the project or dashboard
+    page later.
+
+    Returns None when there's no live LLM client to check with (demo mode with no API key) —
+    the caller should then let the upload proceed exactly as it did before this check existed;
+    process_new_upload's own demo-case handling governs what happens next in that case."""
+    client = _get_client()
+    if client is None:
+        return None
+    rfp_text = _read_upload_via_temp_file(content, extension, read_rfp)
+    return classify_document_validity(rfp_text, client)
+
+
+def process_new_upload(project_id: str, content: bytes, extension: str, skip_validity_check: bool = False):
     """Entry point for a freshly uploaded bid invitation. Runs Phase 1 + the Go/No-Go
     capability check, then either halts for clarification or continues straight through
     Phases 3-4 automatically. Takes raw bytes rather than a path so no plaintext copy of the
     upload is ever written to a persistent location — only a temp file that's deleted before
-    this function returns."""
+    this function returns.
+
+    `skip_validity_check` is set by main.py's create_project route when it already ran
+    check_document_validity() synchronously before creating this project — avoids paying for a
+    second, redundant LLM call here. The reupload route (the one remaining caller that can reach
+    this function without a prior synchronous check) leaves it False so its upload still gets
+    checked."""
     try:
         db.log_action("pipeline_started", project_id, {"stage": "phase1"})
         rfp_text = _read_upload_via_temp_file(content, extension, read_rfp)
@@ -142,7 +166,7 @@ def process_new_upload(project_id: str, content: bytes, extension: str):
         # a real LLM client is configured — DEMO_MODE's bundled sample RFPs are known-good and
         # skip straight to the existing demo-case branch below, exactly as before this gate
         # existed.
-        if client is not None:
+        if client is not None and not skip_validity_check:
             validity = classify_document_validity(rfp_text, client)
             db.log_action("document_validity_checked", project_id, validity.to_dict())
             if not validity.is_bid_document:

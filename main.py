@@ -7,11 +7,18 @@ Routes:
   GET  /login, POST /login            sign in
   POST /logout                        sign out
   GET  /new                           upload form
-  POST /projects                      create project + upload bid invitation, kicks off pipeline
+  POST /projects                      validates the file is a bid document synchronously (no
+                                       project row is created for a rejected file — the New
+                                       Project page just re-renders with an inline error), then
+                                       creates the project + kicks off the background pipeline
   GET  /projects/{id}                 project detail view
   POST /projects/{id}/responses       upload filled-in client responses, resumes pipeline
   GET  /projects/{id}/documents/{did} download a document
-  POST /projects/{id}/reupload        re-upload after a 'Not a Bid Document' halt
+  POST /projects/{id}/reupload        re-upload after a 'Not a Bid Document' halt — kept as a
+                                       defensive fallback, but currently unreachable in practice:
+                                       since POST /projects now rejects invalid documents before
+                                       a project is ever created, no project can enter the
+                                       'Not a Bid Document' status this route requires
   POST /projects/{id}/assumptions/accept  accept AI assumptions — only from 'Awaiting Assumptions Approval'
   POST /projects/{id}/assumptions/cancel  cancel the bid over the assumptions made — same gate
   POST /projects/{id}/preview/generate    submit the edited preview + template choice, builds the docx
@@ -49,6 +56,7 @@ import db
 import storage
 from pipeline_runner import (
     DEMO_MODE,
+    check_document_validity,
     finalize_proposal,
     process_client_responses,
     process_new_upload,
@@ -280,13 +288,51 @@ async def create_project(
     except storage.UploadTooLarge as e:
         raise HTTPException(413, str(e)) from e
 
+    # Bid-document validity check now runs synchronously, right here, before any project row is
+    # created. This replaces the old flow where the check only happened inside the background
+    # pipeline task after the user had already been redirected away to a newly-created project
+    # page — so a rejected upload left a permanent "Not a Bid Document" row cluttering the
+    # dashboard, and the uploader only found out about the rejection by revisiting or refreshing
+    # that page. Now the uploader gets an immediate answer on this same page, and nothing is
+    # created or stored at all for a rejected file.
+    validity_already_checked = False
+    try:
+        validity = check_document_validity(content, extension)
+    except Exception:
+        # A transient LLM/classification failure here shouldn't block the upload outright —
+        # fall through and let the background pipeline's own validity check (and its existing
+        # error handling) take another pass at it, same as before this synchronous check existed.
+        logging.getLogger("rfp_agent").exception(
+            "Synchronous bid-document validity check failed; deferring to the background pipeline"
+        )
+        validity = None
+
+    if validity is not None:
+        validity_already_checked = True
+        db.log_action(
+            "document_validity_checked", None,
+            {**validity.to_dict(), "project_name": project_name.strip()},
+            user_identity=user["username"],
+        )
+        if not validity.is_bid_document:
+            error = "This file doesn't look like a bid invitation or RFP — no project was created."
+            if validity.reasoning:
+                error += f" {validity.reasoning}"
+            return templates.TemplateResponse(
+                request, "new_project.html",
+                _ctx(request, error=error, project_name=project_name),
+                status_code=400,
+            )
+
     project_id = db.create_project(name=project_name.strip(), created_by=user["username"])
     display_name, stored_path, encrypted = storage.save_upload(project_id, bid_file.filename, content)
     db.add_document(project_id, "bid_invitation", display_name, stored_path, encrypted)
     db.log_action("project_created", project_id, {"name": project_name, "filename": display_name},
                   user_identity=user["username"])
 
-    background_tasks.add_task(process_new_upload, project_id, content, extension)
+    background_tasks.add_task(
+        process_new_upload, project_id, content, extension, skip_validity_check=validity_already_checked
+    )
 
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
