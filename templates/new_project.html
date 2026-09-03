@@ -10,6 +10,10 @@
     </div>
 </div>
 
+{% if error %}
+<div class="alert alert-error" role="alert">{{ error }}</div>
+{% endif %}
+
 <div class="card">
     <div class="card__body">
         <form action="/projects" method="post" enctype="multipart/form-data" class="upload-form">
@@ -17,6 +21,7 @@
             <div class="form-field">
                 <label for="project_name">Project name</label>
                 <input type="text" id="project_name" name="project_name" required
+                       value="{{ project_name or '' }}"
                        placeholder="e.g. City of Lakeview — Service Portal Modernization">
             </div>
             <div class="form-field">
