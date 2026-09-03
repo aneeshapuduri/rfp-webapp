@@ -15,10 +15,19 @@ at a heading found in a client-supplied template. Renderers never need to know w
 they're writing to — this is what let the old 3x-duplicated per-section if/elif chains (one
 copy each in the default builder, the matched-template path, and the unmatched-append path)
 collapse into a single implementation per section.
+
+Three sections also embed a chart/diagram built by diagram_builder.py (matplotlib, rendered to
+PNG and inserted via sink.image()): "Project Plan and Milestones" gets a Gantt-style timeline
+chart, "Proposed Team & Staffing Plan" gets an hours-by-role bar chart, and "High-Level Solution
+Overview" gets a left-to-right delivery-phase flow diagram — all three built directly from the
+same timeline/staffing data already in `content`, not a separate LLM call. diagram_builder's
+functions return None (never raise) when they can't make sense of the data, and sink.image()
+silently skips a None — a missing picture is never a reason to fail the whole proposal.
 """
 from __future__ import annotations
 
 import datetime
+import io
 
 from docx import Document
 from docx.enum.section import WD_SECTION
@@ -28,6 +37,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
+from diagram_builder import build_delivery_flow_diagram, build_staffing_chart, build_timeline_chart
 from template_mapper import OUR_SECTIONS
 
 NAVY = RGBColor(0x1F, 0x2D, 0x50)
@@ -273,6 +283,16 @@ class _AppendSink:
             run.font.size = Pt(size)
         return p
 
+    def image(self, png_bytes: bytes | None, width_in: float = 6.0):
+        """Embeds a chart/diagram (see diagram_builder.py) centered in the document. Silently
+        does nothing if png_bytes is None — diagram_builder never raises, it just declines to
+        draw a chart it can't make sense of, and a missing picture should never be a reason to
+        fail the whole proposal."""
+        if not png_bytes:
+            return
+        self.doc.add_picture(io.BytesIO(png_bytes), width=Inches(width_in))
+        self.doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
 
 class _InsertAfterSink:
     """Writes content immediately after a moving cursor anchored at a heading found in a
@@ -311,6 +331,15 @@ class _InsertAfterSink:
         self.cursor.addnext(new_p._p)
         self.cursor = new_p._p
         return new_p
+
+    def image(self, png_bytes: bytes | None, width_in: float = 6.0):
+        if not png_bytes:
+            return
+        self.doc.add_picture(io.BytesIO(png_bytes), width=Inches(width_in))
+        pic_p = self.doc.paragraphs[-1]
+        pic_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        self.cursor.addnext(pic_p._p)
+        self.cursor = pic_p._p
 
 
 def _render_executive_summary(sink, content, company):
@@ -390,11 +419,14 @@ def _render_project_deliverables(sink, content, company):
 
 def _render_solution_overview(sink, content, company):
     sink.body(content["technology_approach"])
+    phase_names = [p.get("phase", "") for p in content.get("timeline", []) if p.get("phase")]
+    sink.image(build_delivery_flow_diagram(phase_names), width_in=6.5)
 
 
 def _render_project_plan_milestones(sink, content, company):
     timeline_rows = [[p["phase"], p["duration"], p["description"]] for p in content["timeline"]]
     sink.table(["Phase", "Duration", "Description"], timeline_rows, [1.6, 1.3, 4.1])
+    sink.image(build_timeline_chart(content["timeline"]))
 
 
 def _render_change_management(sink, content, company):
@@ -418,6 +450,7 @@ def _render_team_staffing_plan(sink, content, company):
         for l in content["staffing"]
     ]
     sink.table(["Role", "Headcount", "Hours/Person", "Total Hours"], staffing_rows, [2.5, 1.2, 1.4, 1.4])
+    sink.image(build_staffing_chart(content["staffing"]))
 
 
 def _render_maintenance_and_support(sink, content, company):
