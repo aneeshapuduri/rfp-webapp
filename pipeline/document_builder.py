@@ -14,6 +14,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
+from template_mapper import OUR_SECTIONS
+
 NAVY = RGBColor(0x1F, 0x2D, 0x50)
 ACCENT = RGBColor(0x2E, 0x74, 0xB5)
 GRAY = RGBColor(0x59, 0x59, 0x59)
@@ -145,8 +147,213 @@ def _add_table(doc: Document, headers: list[str], rows: list[list[str]], widths_
     return table
 
 
-def build_final_proposal(output_path: str, content: dict):
-    """content: the dict returned by phase4_pipeline.run_phase4()."""
+def _find_heading_element(doc: Document, heading_text: str):
+    """Locates a paragraph in an opened (client-supplied) template whose style is a Heading
+    style and whose text matches exactly — this is always a heading text returned by
+    template_mapper.extract_template_headings() on this same document, so an exact match is
+    expected. Returns the underlying XML element (not the python-docx Paragraph wrapper) since
+    that's what the insertion helpers below operate on."""
+    for p in doc.paragraphs:
+        if p.style.name.startswith("Heading") and p.text.strip() == heading_text:
+            return p._p
+    return None
+
+
+def _insert_paragraph_after(doc: Document, anchor_element, text: str = "", style: str | None = None):
+    """python-docx only ever appends new paragraphs/tables at the very end of the document body.
+    To place generated content immediately under an existing heading somewhere in the middle of
+    a client's uploaded template, this creates the paragraph normally (so it lands at the end),
+    then relocates its underlying XML element to sit right after anchor_element. Returns the new
+    element so a caller inserting multiple lines in a row can chain them in order."""
+    new_p = doc.add_paragraph(text, style=style)
+    anchor_element.addnext(new_p._p)
+    return new_p._p
+
+
+def _insert_body_after(doc: Document, anchor_element, text: str):
+    cursor = anchor_element
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("- "):
+            cursor = _insert_paragraph_after(doc, cursor, line[2:], style="List Bullet")
+        else:
+            cursor = _insert_paragraph_after(doc, cursor, line)
+    return cursor
+
+
+def _insert_table_after(doc: Document, anchor_element, headers, rows, widths_in, status_col=None):
+    table = _add_table(doc, headers, rows, widths_in, status_col)  # appended at document end
+    anchor_element.addnext(table._tbl)
+    return table._tbl
+
+
+def _insert_matched_section(doc: Document, our_section: str, template_heading: str, content: dict, company: dict):
+    """Inserts generated content for one of the 10 canonical sections immediately after the
+    matching heading found in the client's uploaded template. No section numbering is added
+    here — the client's own template heading is used exactly as they wrote it."""
+    anchor = _find_heading_element(doc, template_heading)
+    if anchor is None:
+        return
+    cursor = anchor
+
+    if our_section == "Executive Summary":
+        cursor = _insert_body_after(doc, cursor, content["executive_summary"])
+    elif our_section == "Understanding of the Problem":
+        cursor = _insert_body_after(doc, cursor, content["understanding"])
+    elif our_section == "Technical Approach and Methodology":
+        cursor = _insert_body_after(doc, cursor, content["technology_approach"])
+    elif our_section == "Assumptions":
+        if content["assumptions"]:
+            for a in content["assumptions"]:
+                cursor = _insert_paragraph_after(doc, cursor, a, style="List Bullet")
+        else:
+            cursor = _insert_paragraph_after(
+                doc, cursor,
+                "No assumptions were required — all requirements were fully specified in the RFP.",
+            )
+    elif our_section == "Proposed Team & Staffing Plan":
+        for person in company.get("key_personnel", []):
+            cursor = _insert_paragraph_after(doc, cursor, f"{person['name']} — {person['role']}")
+            cursor = _insert_paragraph_after(doc, cursor, person.get("credentials", ""))
+            cursor = _insert_paragraph_after(doc, cursor, person.get("bio", ""))
+        staffing_rows = [
+            [l["role"], l["headcount"], l["hours_per_person"], l["total_hours"]]
+            for l in content["staffing"]
+        ]
+        cursor = _insert_table_after(doc, cursor, ["Role", "Headcount", "Hours/Person", "Total Hours"],
+                                      staffing_rows, [2.5, 1.2, 1.4, 1.4])
+    elif our_section == "Proposed Project Timeline":
+        timeline_rows = [[p["phase"], p["duration"], p["description"]] for p in content["timeline"]]
+        cursor = _insert_table_after(doc, cursor, ["Phase", "Duration", "Description"], timeline_rows,
+                                      [1.6, 1.3, 4.1])
+    elif our_section == "Effort & Pricing Summary":
+        pricing = content["pricing"]
+        pricing_rows = [
+            [l["role"], l["total_hours"], f"${l['hourly_rate']:,.2f}", f"${l['subtotal']:,.2f}"]
+            for l in pricing["lines"]
+        ]
+        cursor = _insert_table_after(doc, cursor, ["Role", "Total Hours", "Rate", "Subtotal"],
+                                      pricing_rows, [2.3, 1.3, 1.3, 1.6])
+        summary_text = (
+            f"Labor Subtotal: ${pricing['labor_subtotal']:,.2f}\n"
+            f"Contingency ({pricing['contingency_pct']}%): ${pricing['contingency_amount']:,.2f}\n"
+            f"TOTAL: ${pricing['total']:,.2f}"
+        )
+        cursor = _insert_body_after(doc, cursor, summary_text)
+    elif our_section == "Relevant Past Performance":
+        cursor = _insert_body_after(doc, cursor, content["past_performance"])
+    elif our_section == "Compliance Matrix":
+        matrix_rows = [[m["requirement"], m["response"], m["status"]] for m in content["compliance_matrix"]]
+        cursor = _insert_table_after(doc, cursor, ["Requirement", "Our Response", "Status"], matrix_rows,
+                                      [2.3, 3.4, 1.3], status_col=2)
+    elif our_section == "Closing Statement":
+        cursor = _insert_body_after(doc, cursor, content["closing"])
+
+
+def _append_section_content(doc: Document, our_section: str, content: dict, company: dict):
+    """Same section content as _insert_matched_section, but appended normally at the end of the
+    document — used for sections that couldn't be confidently matched to a heading in the
+    client's template (see the 'Needs Manual Placement' block in build_final_proposal)."""
+    if our_section == "Executive Summary":
+        _add_body(doc, content["executive_summary"])
+    elif our_section == "Understanding of the Problem":
+        _add_body(doc, content["understanding"])
+    elif our_section == "Technical Approach and Methodology":
+        _add_body(doc, content["technology_approach"])
+    elif our_section == "Assumptions":
+        if content["assumptions"]:
+            for a in content["assumptions"]:
+                doc.add_paragraph(a, style="List Bullet")
+        else:
+            doc.add_paragraph("No assumptions were required — all requirements were fully specified in the RFP.")
+    elif our_section == "Proposed Team & Staffing Plan":
+        for person in company.get("key_personnel", []):
+            p = doc.add_paragraph()
+            run = p.add_run(f"{person['name']} — {person['role']}")
+            run.font.bold = True
+            run.font.color.rgb = NAVY
+            cred = doc.add_paragraph()
+            cred_run = cred.add_run(person.get("credentials", ""))
+            cred_run.italic = True
+            cred_run.font.color.rgb = GRAY
+            doc.add_paragraph(person.get("bio", ""))
+        staffing_rows = [
+            [l["role"], l["headcount"], l["hours_per_person"], l["total_hours"]]
+            for l in content["staffing"]
+        ]
+        _add_table(doc, ["Role", "Headcount", "Hours/Person", "Total Hours"], staffing_rows, [2.5, 1.2, 1.4, 1.4])
+    elif our_section == "Proposed Project Timeline":
+        timeline_rows = [[p["phase"], p["duration"], p["description"]] for p in content["timeline"]]
+        _add_table(doc, ["Phase", "Duration", "Description"], timeline_rows, [1.6, 1.3, 4.1])
+    elif our_section == "Effort & Pricing Summary":
+        pricing = content["pricing"]
+        pricing_rows = [
+            [l["role"], l["total_hours"], f"${l['hourly_rate']:,.2f}", f"${l['subtotal']:,.2f}"]
+            for l in pricing["lines"]
+        ]
+        _add_table(doc, ["Role", "Total Hours", "Rate", "Subtotal"], pricing_rows, [2.3, 1.3, 1.3, 1.6])
+        summary_p = doc.add_paragraph()
+        summary_p.add_run(f"Labor Subtotal: ${pricing['labor_subtotal']:,.2f}\n")
+        summary_p.add_run(f"Contingency ({pricing['contingency_pct']}%): ${pricing['contingency_amount']:,.2f}\n")
+        total_run = summary_p.add_run(f"TOTAL: ${pricing['total']:,.2f}")
+        total_run.bold = True
+        total_run.font.size = Pt(13)
+        total_run.font.color.rgb = NAVY
+    elif our_section == "Relevant Past Performance":
+        _add_body(doc, content["past_performance"])
+    elif our_section == "Compliance Matrix":
+        matrix_rows = [[m["requirement"], m["response"], m["status"]] for m in content["compliance_matrix"]]
+        _add_table(doc, ["Requirement", "Our Response", "Status"], matrix_rows, [2.3, 3.4, 1.3], status_col=2)
+    elif our_section == "Closing Statement":
+        _add_body(doc, content["closing"])
+
+
+def _build_final_proposal_with_template(output_path: str, content: dict, template_path: str,
+                                         section_mapping: dict | None):
+    """Writes generated content into the client's own uploaded .docx template instead of a
+    fresh document — deliberately does NOT call _style_base or _add_cover_page or _add_footer:
+    the whole point of a custom template is to keep the client's own styling and cover/branding
+    intact, so this only ever inserts new content, never restyles or replaces what's already
+    there. Any of the 10 canonical sections template_mapper couldn't confidently match to a
+    heading in the template are appended at the end under a 'Needs Manual Placement' heading
+    instead of being silently dropped."""
+    company = content["company"]
+    doc = Document(template_path)
+
+    mapping = section_mapping or {"matched": {}, "unmatched": list(OUR_SECTIONS)}
+    for our_section, template_heading in mapping.get("matched", {}).items():
+        _insert_matched_section(doc, our_section, template_heading, content, company)
+
+    unmatched = mapping.get("unmatched", [])
+    if unmatched:
+        doc.add_heading("Needs Manual Placement", level=1)
+        note = doc.add_paragraph()
+        note.add_run(
+            "The following sections could not be confidently matched to a heading in your "
+            "uploaded template and have been placed here instead — please move each into the "
+            "appropriate place in the document."
+        ).italic = True
+        for our_section in unmatched:
+            doc.add_heading(our_section, level=2)
+            _append_section_content(doc, our_section, content, company)
+
+    doc.save(output_path)
+    return output_path
+
+
+def build_final_proposal(output_path: str, content: dict, template_path: str | None = None,
+                          section_mapping: dict | None = None):
+    """content: the dict returned by phase4_pipeline.run_phase4() (optionally edited by the user
+    in the preview stage). When template_path is given (a client-uploaded .docx), section_mapping
+    should be the dict returned by template_mapper.map_sections_to_template() for that same
+    template's headings — content is then written into the client's own document instead of a
+    fresh one (see _build_final_proposal_with_template). template_path is None reproduces the
+    original default-template behavior exactly as before this parameter existed."""
+    if template_path is not None:
+        return _build_final_proposal_with_template(output_path, content, template_path, section_mapping)
+
     company = content["company"]
     doc = Document()
     _style_base(doc)
