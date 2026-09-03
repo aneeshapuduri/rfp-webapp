@@ -21,6 +21,36 @@
     "Proprietary Agile-Gov delivery framework tailored to public-sector procurement cycles",
     "Zero missed contractual milestones across active federal and state contracts in the past 3 years"
   ],
+  "value_proposition": "Meridian pairs public-sector procurement fluency with hands-on engineering depth, so clients get a partner who understands both the compliance realities of government IT and how to actually ship modern, maintainable systems on a fixed budget and timeline.",
+  "technologies_and_skillsets": [
+    "AWS GovCloud, Azure Government, and commercial AWS/Azure",
+    "React, TypeScript, Node.js, Python/Django, .NET",
+    "PostgreSQL, SQL Server, Redis, Elasticsearch",
+    "Terraform, Docker, Kubernetes, GitHub Actions/Azure DevOps CI-CD",
+    "Esri ArcGIS and GIS integration tooling",
+    "Power BI and Tableau for analytics and reporting",
+    "OAuth2/SAML identity federation and Single Sign-On integration"
+  ],
+  "partnerships": [
+    {"name": "Amazon Web Services (Select Tier Partner)", "description": "Co-architecting GovCloud landing zones and FedRAMP-aligned reference architectures."},
+    {"name": "Esri", "description": "Reseller and integration partner for ArcGIS-based public-sector solutions."},
+    {"name": "Okta", "description": "Implementation partner for identity federation and SSO across legacy and modern systems."}
+  ],
+  "industry_recognition": [
+    "Named to the GovTech 100 (2024) — recognizing companies most active in the state/local government market.",
+    "SOC 2 Type II attestation renewed annually with zero material findings since 2019.",
+    "Regional Technology Association \"Public Sector Partner of the Year\" finalist, 2023."
+  ],
+  "change_management_approach": "Meridian manages scope and change through a lightweight, documented change-control process: any request outside the agreed baseline is logged, assessed for schedule/cost/risk impact, and reviewed jointly with the client's project sponsor before work begins. Approved changes are tracked in the same project management system used for day-to-day delivery, so the client always has a single, current view of scope, schedule, and budget impact.",
+  "performance_optimization_approach": "Performance is treated as a first-class, measurable requirement rather than a post-launch concern: target response times and load thresholds are agreed during design, validated through load testing before go-live, and monitored continuously afterward via the same observability stack used for production support (metrics, tracing, and alerting), with a documented tuning process for any metric that drifts outside its agreed threshold.",
+  "maintenance_and_support": "Following go-live, Meridian provides a defined warranty period (typically 90 days) with defect remediation at no additional cost, followed by an ongoing maintenance agreement covering security patching, dependency updates, minor enhancements, and a monitored support queue staffed during agreed business hours (with 24/7 coverage available for critical-severity issues where contracted).",
+  "operating_support_model": "Support requests are received through a dedicated ticketing queue tied to the SLA tiers below, triaged by severity, and routed to the engineer(s) most familiar with the affected component. A named Technical Account Lead maintains continuity between the delivery team and the client's IT staff, and a monthly service review covers ticket volume, SLA adherence, and any recurring issues worth addressing at the root cause.",
+  "sla_default": [
+    {"severity": "Critical (system down)", "response_time": "30 minutes", "resolution_time": "4 hours"},
+    {"severity": "High (major function impaired)", "response_time": "2 business hours", "resolution_time": "1 business day"},
+    {"severity": "Medium (minor function impaired)", "response_time": "1 business day", "resolution_time": "5 business days"},
+    {"severity": "Low (cosmetic / informational)", "response_time": "2 business days", "resolution_time": "Next scheduled release"}
+  ],
   "past_performance": [
     {
       "client": "State Department of Transportation",
