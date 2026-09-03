@@ -29,14 +29,17 @@ import storage
 from pipeline.claude_client import ClaudeClient
 from pipeline.clarification_doc_builder import build_clarification_doc
 from pipeline.document_builder import build_final_proposal
+from pipeline.document_validity import DocumentValidityResult, classify_document_validity
 from pipeline.go_no_go import assess_capability_fit
 from pipeline.phase1_pipeline import guess_agency, guess_project_title, run_phase1
 from pipeline.phase2_pipeline import resolve_with_responses
-from pipeline.phase3_pipeline import run_phase3
+from pipeline.phase3_pipeline import load_company_profile, run_phase3
 from pipeline.phase4_pipeline import ComplianceMatrixIncompleteError, run_phase4
+from pipeline.pricing_engine import build_pricing_summary
 from pipeline.response_reader import read_client_responses
 from pipeline.rfp_reader import read_rfp
 from pipeline.schema import Phase1Result
+from pipeline.template_mapper import extract_template_headings, map_sections_to_template
 
 logger = logging.getLogger("rfp_agent.pipeline")
 
@@ -135,6 +138,17 @@ def process_new_upload(project_id: str, content: bytes, extension: str):
         rfp_text = _read_upload_via_temp_file(content, extension, read_rfp)
         client = _get_client()
 
+        # Bid-document validity gate: runs before any requirement extraction. Only checked when
+        # a real LLM client is configured — DEMO_MODE's bundled sample RFPs are known-good and
+        # skip straight to the existing demo-case branch below, exactly as before this gate
+        # existed.
+        if client is not None:
+            validity = classify_document_validity(rfp_text, client)
+            db.log_action("document_validity_checked", project_id, validity.to_dict())
+            if not validity.is_bid_document:
+                _record_invalid_document(project_id, validity)
+                return
+
         if client is None and DEMO_MODE:
             case = _detect_demo_case(rfp_text)
             if case is None:
@@ -167,6 +181,25 @@ def process_new_upload(project_id: str, content: bytes, extension: str):
         _record_failure(project_id, "phase1", e, status="Analyzing")
 
 
+def _record_invalid_document(project_id: str, validity: DocumentValidityResult):
+    """The upload doesn't look like a bid/RFP solicitation. This isn't a pipeline failure, so it
+    deliberately does NOT set error_message (that field drives the generic 'processing hit an
+    error' panel) — it's a valid classification outcome with its own status and its own reason
+    field, and the uploaded file itself is left exactly where main.py's create_project route
+    already stored it (as a 'bid_invitation' document) so it's still available for audit/review
+    even though the pipeline never analyzed it."""
+    db.update_project(
+        project_id,
+        status="Not a Bid Document",
+        error_message=None,
+        validity_rejection_reason=validity.reasoning,
+    )
+    db.log_action(
+        "document_rejected_invalid", project_id,
+        {"reasoning": validity.reasoning, "confidence": validity.confidence},
+    )
+
+
 def _run_capability_fit(project_id: str, result: Phase1Result):
     """Go/No-Go: score extracted requirements against config/company_profile.json's stated
     core capabilities. Deliberately never fatal to the pipeline — a bug in this heuristic
@@ -183,19 +216,19 @@ def _run_capability_fit(project_id: str, result: Phase1Result):
 
 def _generate_clarification_doc(project_id: str, result: Phase1Result):
     company = json.loads((_config_path("company_profile.json")).read_text())
-    out_dir = storage.GENERATED_DIR / project_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-    tmp_path = str(out_dir / f"_tmp_{db.new_id()}.docx")
-    mapping = build_clarification_doc(result, company["company_name"], tmp_path)
-    # build_clarification_doc also writes a '<tmp_path>.mapping.json' sidecar as a side effect.
-    # The mapping is already returned above and persisted to the DB (clarification_mapping_json)
-    # below, so the sidecar file itself is redundant — delete it rather than leaving it on disk.
-    mapping_sidecar = pathlib.Path(tmp_path).with_suffix(".mapping.json")
-
-    content = open(tmp_path, "rb").read()
-    os.unlink(tmp_path)
-    if mapping_sidecar.exists():
-        mapping_sidecar.unlink()
+    # build_clarification_doc needs a real filesystem path to write to (python-docx writes to a
+    # path, not bytes) — this is pure scratch space: built, immediately read back into memory,
+    # and discarded. It was previously written under storage.GENERATED_DIR (a mounted disk on
+    # Render); now that the durable copy goes straight to Supabase Storage a few lines down,
+    # this scratch file belongs in the system temp dir instead — nothing here needs to survive
+    # a restart, so it no longer needs a persistent disk at all. build_clarification_doc also
+    # writes a '<tmp_path>.mapping.json' sidecar as a side effect; the mapping is already
+    # returned above and persisted to the DB (clarification_mapping_json) below, so the sidecar
+    # is redundant — TemporaryDirectory cleanup removes it along with everything else.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = str(pathlib.Path(tmp_dir) / f"_tmp_{db.new_id()}.docx")
+        mapping = build_clarification_doc(result, company["company_name"], tmp_path)
+        content = pathlib.Path(tmp_path).read_bytes()
     stored_path, encrypted = storage.save_generated(project_id, "clarification_questions.docx", content)
     db.add_document(project_id, "clarification_questions", "clarification_questions.docx", stored_path, encrypted)
     db.update_project(
@@ -293,16 +326,65 @@ def _run_phase3_and_4(project_id: str, result: Phase1Result, client: ClaudeClien
     else:
         content = run_phase4(result, phase3, duration_months, client=client)
 
-    out_dir = storage.GENERATED_DIR / project_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-    tmp_path = str(out_dir / f"_tmp_{db.new_id()}.docx")
-    build_final_proposal(tmp_path, content)
-    proposal_bytes = open(tmp_path, "rb").read()
-    os.unlink(tmp_path)
-
-    stored_path, encrypted = storage.save_generated(project_id, "final_proposal.docx", proposal_bytes)
-    db.add_document(project_id, "final_proposal", "final_proposal.docx", stored_path, encrypted)
-    db.update_project(project_id, status="Ready to Generate", phase4_content_json=json.dumps(
+    # Phase 3/4 are now done, but the .docx is no longer built here. Instead the generated
+    # content is persisted and the project stops for human review: first an assumptions
+    # accept/cancel decision (only if the model needed to make any), then an editable preview
+    # with a template choice — the docx is only actually built once the user finalizes that
+    # preview (see finalize_proposal below).
+    db.update_project(project_id, phase4_content_json=json.dumps(
         {k: v for k, v in content.items() if k != "company"}
     ))
-    db.log_action("final_proposal_generated", project_id, {"total_price": phase3.pricing["total"]})
+
+    assumption_items = [r for r in result.requirements if r.status == "assumption_needed"]
+    if assumption_items:
+        db.update_project(project_id, status="Awaiting Assumptions Approval")
+        db.log_action("awaiting_assumptions_approval", project_id, {"count": len(assumption_items)})
+    else:
+        db.update_project(project_id, status="Awaiting Preview")
+        db.log_action("awaiting_preview", project_id, {})
+
+
+def finalize_proposal(project_id: str, edited_content: dict, template_choice: str,
+                       custom_template_bytes: bytes | None):
+    """Runs once the user submits the editable preview (POST /projects/{id}/preview/generate).
+    This is the only place the final .docx is actually built now — everything before this point
+    (Phase 1-4, the assumptions gate, the preview itself) only ever produced/edited JSON content.
+    Real work happens here (docx build + Supabase upload), so this is invoked as a background
+    task, unlike the cheap status-flip routes for the assumptions gate."""
+    try:
+        company = load_company_profile()
+        content = dict(edited_content)
+        content["company"] = company
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = str(pathlib.Path(tmp_dir) / f"_tmp_{db.new_id()}.docx")
+            if template_choice == "custom" and custom_template_bytes:
+                template_path = str(pathlib.Path(tmp_dir) / f"_template_{db.new_id()}.docx")
+                pathlib.Path(template_path).write_bytes(custom_template_bytes)
+                headings = extract_template_headings(template_path)
+                mapping = map_sections_to_template(headings)
+                build_final_proposal(tmp_path, content, template_path=template_path, section_mapping=mapping)
+            else:
+                build_final_proposal(tmp_path, content)
+            proposal_bytes = pathlib.Path(tmp_path).read_bytes()
+
+        stored_path, encrypted = storage.save_generated(project_id, "final_proposal.docx", proposal_bytes)
+        db.add_document(project_id, "final_proposal", "final_proposal.docx", stored_path, encrypted)
+        db.update_project(
+            project_id,
+            status="Ready to Generate",
+            phase4_content_json=json.dumps(edited_content),
+            template_choice=template_choice,
+        )
+        db.log_action("final_proposal_generated", project_id, {"template_choice": template_choice})
+    except Exception as e:  # noqa: BLE001
+        _record_failure(project_id, "finalize_proposal", e, status="Awaiting Preview")
+
+
+def recompute_staffing_and_pricing(edited_staffing_plan: list[dict]) -> dict:
+    """Re-runs the existing, deterministic pricing engine against user-edited headcount/hours
+    figures so the final numbers (total hours, subtotal, labor subtotal, contingency, total)
+    stay arithmetically consistent no matter what the user changed in the preview — no new
+    pricing logic needed, this is exactly what build_pricing_summary already does for the
+    original Phase 3 output."""
+    return build_pricing_summary(edited_staffing_plan).to_dict()
