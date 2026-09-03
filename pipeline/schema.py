@@ -52,10 +52,26 @@ class Phase1Result:
 
     @property
     def pipeline_decision(self) -> Literal["proceed", "halt_for_clarification"]:
-        return "halt_for_clarification" if self.summary["ambiguous"] > 0 else "proceed"
+        # Only requirements that are still ambiguous AND not yet escalated actually block the
+        # pipeline. Previously this checked summary["ambiguous"] directly, which counted
+        # escalated items too — so once a client response came back and resolve_with_responses
+        # marked it "insufficient" (status stays 'ambiguous', escalated_for_manual_review=True,
+        # by design — see resolve_with_responses' docstring), the project could never leave
+        # 'Clarifications Sent' again, no matter how many more times responses were uploaded.
+        # That was a real, reported bug: a project stuck forever with no way to proceed and no
+        # explanation why. Escalation is supposed to mean "stop looping on this automatically,
+        # a human already reviewed it" — not "block forever" — so it's excluded here.
+        return "halt_for_clarification" if self.get_blocking() else "proceed"
 
     def get_ambiguous(self) -> list[RequirementItem]:
         return [r for r in self.requirements if r.status == "ambiguous"]
+
+    def get_blocking(self) -> list[RequirementItem]:
+        """Ambiguous requirements that still need a client answer before the pipeline can
+        proceed — excludes ones already escalated_for_manual_review, since those already went
+        through one clarification round-trip and are meant to stop blocking further automatic
+        progress (they still show up flagged for a human, just not as a hard blocker)."""
+        return [r for r in self.requirements if r.status == "ambiguous" and not r.escalated_for_manual_review]
 
     def get_escalated(self) -> list[RequirementItem]:
         return [r for r in self.requirements if r.escalated_for_manual_review]
