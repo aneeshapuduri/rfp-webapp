@@ -7,7 +7,6 @@
 <div class="page-head">
     <div>
         <h1>{{ project.name }}</h1>
-        <p class="agency-line">{{ project.agency or "Agency not yet identified" }}</p>
     </div>
     <span class="status-pill status-{{ project.status | replace(' ', '-') | lower }}">
         {{ status_icon(project.status, project.error_message) }}
@@ -89,7 +88,13 @@
         </span>
         <div>
             <div class="status-panel__title">Paused — waiting on the client</div>
-            <div class="status-panel__text">Clarification questions have been sent. Upload their filled-in answers below to resume automatically.</div>
+            <div class="status-panel__text">
+                {% if blocking_clarification_items %}
+                {{ blocking_clarification_items | length }} of {{ open_clarification_items | length }} clarification question{{ "s" if open_clarification_items | length != 1 else "" }} still need{{ "s" if open_clarification_items | length == 1 else "" }} a response — see "Clarification Responses" below for exactly which ones, and enter or auto-fill answers there to resume.
+                {% else %}
+                All blocking questions have a response — see "Clarification Responses" below to submit and resume.
+                {% endif %}
+            </div>
         </div>
 
         {% elif project.status == "Awaiting Assumptions Approval" %}
@@ -269,18 +274,69 @@
 
 {% if can_upload_responses %}
 <div class="card" aria-labelledby="responses-heading">
-    <div class="card__head"><h2 id="responses-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload Client Responses</h2></div>
+    <div class="card__head"><h2 id="responses-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Clarification Responses</h2></div>
     <div class="card__body">
-        <p>Once the client has answered the clarification questions, upload their filled-in
-           document here to resume automatic processing.</p>
-        <form action="/projects/{{ project.id }}/responses" method="post" enctype="multipart/form-data" class="upload-form">
+        {% if no_answers_found %}
+        <div class="alert alert-error">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            <div>We couldn't automatically match any answers in that document to a question — the boxes below are still empty. Make sure it's the same clarification-questions document generated for this project, with the Answer column filled in, or just type the answers directly below.</div>
+        </div>
+        {% endif %}
+
+        {% if not open_clarification_items %}
+        <p>There aren't any outstanding clarification questions recorded for this project right now.</p>
+        {% else %}
+
+        {% if blocking_clarification_items %}
+        <div class="alert alert-error">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <div><strong>{{ blocking_clarification_items | length }} of {{ open_clarification_items | length }} question{{ "s" if open_clarification_items | length != 1 else "" }} still need{{ "s" if open_clarification_items | length == 1 else "" }} a response</strong> before this project can move forward — see the item{{ "s" if blocking_clarification_items | length != 1 else "" }} marked "Needs a response" below.</div>
+        </div>
+        {% else %}
+        <div class="alert alert-info">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 17 9"/></svg>
+            <div>Every blocking question has a response recorded. The item{{ "s" if escalated_clarification_items | length != 1 else "" }} below {{ "are" if escalated_clarification_items | length != 1 else "is" }} flagged for internal review only and won't stop this project from continuing — revise if you'd like, or submit as-is to proceed.</div>
+        </div>
+        {% endif %}
+
+        <p>Type each answer directly below, or upload the client's filled-in clarification
+           document to auto-fill these boxes from it — either way, review what's in each box and
+           click <strong>Submit Responses &amp; Resume</strong> when ready.</p>
+
+        <form action="/projects/{{ project.id }}/responses" method="post" enctype="multipart/form-data" class="upload-form" style="margin-bottom:20px; padding-bottom:16px; border-bottom:1px solid var(--border);">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <div class="form-field">
-                <label for="responses_file">Filled-in clarification questions document</label>
-                <input type="file" id="responses_file" name="responses_file" accept=".docx" required>
+                <label for="responses_file">Auto-fill from a filled-in clarification document (optional)</label>
+                <input type="file" id="responses_file" name="responses_file" accept=".docx">
             </div>
-            <button type="submit" class="btn-primary">Upload &amp; Resume</button>
+            <button type="submit" class="btn-ghost">Auto-fill from document</button>
         </form>
+
+        <form action="/projects/{{ project.id }}/responses/submit" method="post" class="upload-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            {% for item in open_clarification_items %}
+            <div class="form-field" style="border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px;">
+                <label for="response_{{ item.id }}" style="font-weight:600; display:block;">
+                    {{ item.requirement }}
+                    {% if item.escalated_for_manual_review %}
+                    <span class="cap-chip" style="background:var(--decision-bg); color:var(--decision); margin-left:6px;">Escalated — optional</span>
+                    {% else %}
+                    <span class="cap-chip" style="background:var(--danger-bg); color:var(--danger); margin-left:6px;">Needs a response</span>
+                    {% endif %}
+                </label>
+                <p class="doc-meta" style="margin:4px 0 8px;">{{ item.clarification_question }}</p>
+                {% if item.escalated_for_manual_review %}
+                <p class="doc-meta" style="margin:0 0 8px; color:var(--danger);">A previous answer to this was reviewed and judged insufficient: {{ item.reasoning }}</p>
+                {% endif %}
+                <textarea id="response_{{ item.id }}" name="response_{{ item.id }}" rows="3" style="width:100%;"
+                          placeholder="Type the client's answer here">{{ pending_responses.get(item.id, item.client_response or "") }}</textarea>
+            </div>
+            {% endfor %}
+
+            <button type="submit" class="btn-primary">Submit Responses &amp; Resume</button>
+        </form>
+        {% endif %}
     </div>
 </div>
 {% endif %}
