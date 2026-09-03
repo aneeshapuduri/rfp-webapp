@@ -42,11 +42,15 @@ if not DATABASE_URL:
 
 VALID_STATUSES = [
     "Analyzing",
+    "Not a Bid Document",
     "Clarifications Sent",
     "Responses Pending",
+    "Awaiting Assumptions Approval",
+    "Awaiting Preview",
     "Ready to Generate",
     "Submitted",
     "Declined",
+    "Cancelled",
 ]
 
 SCHEMA = """
@@ -97,6 +101,18 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT NOT NULL,
     created_by TEXT
 );
+
+-- Per-member project visibility. Admins are never restricted (checked in application code, not
+-- here) — a row here only ever matters for a 'member' user. A member's accessible set is the
+-- union of these grants plus any project they personally created (projects.created_by), which
+-- is why there's no need to auto-insert a row here when a member creates a project themselves.
+CREATE TABLE IF NOT EXISTS project_access (
+    user_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    granted_at TEXT NOT NULL,
+    granted_by TEXT,
+    PRIMARY KEY (user_id, project_id)
+);
 """
 
 # Columns added after the initial release — applied for databases created before this column
@@ -105,6 +121,8 @@ _MIGRATIONS = [
     ("projects", "capability_fit_json", "TEXT"),
     ("projects", "created_by", "TEXT"),
     ("documents", "encrypted", "INTEGER NOT NULL DEFAULT 0"),
+    ("projects", "template_choice", "TEXT"),
+    ("projects", "validity_rejection_reason", "TEXT"),
 ]
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
@@ -172,11 +190,37 @@ def _apply_migrations(conn: _Conn):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
 
+def _table_exists(conn: _Conn, table: str) -> bool:
+    row = conn.execute(
+        "SELECT to_regclass(?) AS reg", (table,)
+    ).fetchone()
+    return row["reg"] is not None
+
+
+def _grandfather_project_access(conn: _Conn):
+    """Runs exactly once — only right after project_access is created for the first time (see
+    init_db below). Every existing member gets access to every existing non-deleted project, so
+    nobody who could already see a project loses access the moment this feature ships. Projects
+    created after this point are NOT retroactively granted to old members — only to whichever
+    members an admin explicitly grants them to (or the member who creates them)."""
+    conn.execute(
+        "INSERT INTO project_access (user_id, project_id, granted_at, granted_by) "
+        "SELECT u.id, p.id, ?, 'system_grandfather' "
+        "FROM users u CROSS JOIN projects p "
+        "WHERE u.role = 'member' AND p.deleted_at IS NULL "
+        "ON CONFLICT (user_id, project_id) DO NOTHING",
+        (now(),),
+    )
+
+
 def init_db():
     conn = get_conn()
     try:
+        project_access_existed = _table_exists(conn, "project_access")
         conn.executescript(SCHEMA)
         _apply_migrations(conn)
+        if not project_access_existed:
+            _grandfather_project_access(conn)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -278,6 +322,82 @@ def get_document(doc_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+# ---------- Project access ----------
+# Admins are always unrestricted — that's checked in application code (user["role"] == "admin"),
+# never here. These functions only ever matter for filtering what a 'member' user can reach.
+
+def grant_project_access(user_id: str, project_id: str, granted_by: str | None = None):
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO project_access (user_id, project_id, granted_at, granted_by) "
+        "VALUES (?, ?, ?, ?) ON CONFLICT (user_id, project_id) DO NOTHING",
+        (user_id, project_id, now(), granted_by),
+    )
+    conn.commit()
+    conn.close()
+
+
+def revoke_project_access(user_id: str, project_id: str):
+    conn = get_conn()
+    conn.execute(
+        "DELETE FROM project_access WHERE user_id = ? AND project_id = ?", (user_id, project_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_user_project_access(user_id: str, project_ids: list[str], granted_by: str | None = None):
+    """Replaces the full set of explicit grants for a user in one go — used both when an admin
+    creates a member with an initial project list, and when editing an existing member's access
+    afterward."""
+    conn = get_conn()
+    conn.execute("DELETE FROM project_access WHERE user_id = ?", (user_id,))
+    ts = now()
+    for pid in project_ids:
+        conn.execute(
+            "INSERT INTO project_access (user_id, project_id, granted_at, granted_by) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT (user_id, project_id) DO NOTHING",
+            (user_id, pid, ts, granted_by),
+        )
+    conn.commit()
+    conn.close()
+
+
+def list_accessible_project_ids(user_id: str) -> set[str]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT project_id FROM project_access WHERE user_id = ?", (user_id,)
+    ).fetchall()
+    conn.close()
+    return {r["project_id"] for r in rows}
+
+
+def user_can_access_project(user: dict, project: dict, accessible_ids: set[str] | None = None) -> bool:
+    if user["role"] == "admin":
+        return True
+    if project.get("created_by") == user["username"]:
+        return True
+    ids = accessible_ids if accessible_ids is not None else list_accessible_project_ids(user["id"])
+    return project["id"] in ids
+
+
+def list_projects_for_user(user: dict, include_deleted: bool = False) -> list[dict]:
+    if user["role"] == "admin":
+        return list_projects(include_deleted)
+    conn = get_conn()
+    sql = (
+        "SELECT * FROM projects WHERE "
+        "(id IN (SELECT project_id FROM project_access WHERE user_id = ?) OR created_by = ?)"
+    )
+    params = [user["id"], user["username"]]
+    if not include_deleted:
+        sql += " AND deleted_at IS NULL"
+    sql += " ORDER BY created_at DESC"
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 # ---------- Audit log ----------
 
 def log_action(action: str, project_id: str | None = None, detail: dict | str | None = None,
@@ -304,6 +424,48 @@ def list_audit_log(project_id: str | None = None, limit: int = 500) -> list[dict
     else:
         rows = conn.execute(
             "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?", (limit,)
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def list_audit_log_for_user(user: dict, project_id: str | None = None, limit: int = 500) -> list[dict]:
+    """Same as list_audit_log, but a non-admin only sees entries for projects they can access,
+    plus entries with no project (e.g. their own login activity) that are attributed to them."""
+    if user["role"] == "admin":
+        return list_audit_log(project_id, limit)
+    conn = get_conn()
+    accessible = list_accessible_project_ids(user["id"])
+    created = {
+        r["id"] for r in conn.execute(
+            "SELECT id FROM projects WHERE created_by = ?", (user["username"],)
+        ).fetchall()
+    }
+    visible_ids = accessible | created
+    if project_id:
+        if project_id not in visible_ids:
+            conn.close()
+            return []
+        rows = conn.execute(
+            "SELECT * FROM audit_log WHERE project_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (project_id, limit),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    if visible_ids:
+        placeholders = ", ".join("?" for _ in visible_ids)
+        rows = conn.execute(
+            f"SELECT * FROM audit_log WHERE project_id IN ({placeholders}) "
+            "OR (project_id IS NULL AND user_identity = ?) "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (*visible_ids, user["username"], limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM audit_log WHERE project_id IS NULL AND user_identity = ? "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (user["username"], limit),
         ).fetchall()
     conn.close()
     return [dict(r) for r in rows]

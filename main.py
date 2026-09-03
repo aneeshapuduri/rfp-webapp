@@ -11,15 +11,24 @@ Routes:
   GET  /projects/{id}                 project detail view
   POST /projects/{id}/responses       upload filled-in client responses, resumes pipeline
   GET  /projects/{id}/documents/{did} download a document
+  POST /projects/{id}/reupload        re-upload after a 'Not a Bid Document' halt
+  POST /projects/{id}/assumptions/accept  accept AI assumptions — only from 'Awaiting Assumptions Approval'
+  POST /projects/{id}/assumptions/cancel  cancel the bid over the assumptions made — same gate
+  POST /projects/{id}/preview/generate    submit the edited preview + template choice, builds the docx
   POST /projects/{id}/approve         mark Submitted — only valid from 'Ready to Generate'
   POST /projects/{id}/reject          mark Declined — only valid from 'Ready to Generate'
   POST /projects/{id}/delete          soft-delete a project
-  GET  /audit                         audit log view
-  GET  /admin/users, POST /admin/users, POST /admin/users/{id}/deactivate   admin-only user management
+  GET  /audit                         audit log view (filtered to accessible projects for members)
+  GET  /admin/users, POST /admin/users, POST /admin/users/{id}/deactivate,
+  POST /admin/users/{id}/access       admin-only user management + per-project access grants
 
 Every route above except /login and /static/* requires a logged-in, active user — enforced by
 auth.AuthGateMiddleware, not by a per-route check, so a route added later can't accidentally
 ship without one. Every POST route also requires a valid CSRF token (auth.verify_csrf).
+
+Per-project access: admins always have full access to every project. Members only have access
+to projects an admin has explicitly granted them (db.project_access) plus projects they created
+themselves — enforced via _get_project_or_403() on every route that touches a specific project.
 """
 from __future__ import annotations
 
@@ -38,7 +47,13 @@ from starlette.middleware.sessions import SessionMiddleware
 import auth
 import db
 import storage
-from pipeline_runner import DEMO_MODE, process_client_responses, process_new_upload
+from pipeline_runner import (
+    DEMO_MODE,
+    finalize_proposal,
+    process_client_responses,
+    process_new_upload,
+    recompute_staffing_and_pricing,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -61,6 +76,7 @@ app.add_middleware(SessionMiddleware, secret_key=auth.get_session_secret(), same
 @app.on_event("startup")
 def startup():
     db.init_db()
+    storage.ensure_bucket_exists()
     auth.ensure_bootstrap_admin()
     if not storage.is_encryption_enabled():
         print("[STARTUP WARNING] ENCRYPTION_KEY is not set — documents will be stored "
@@ -74,17 +90,33 @@ def startup():
 
 STATUS_LABELS = {
     "Analyzing": "Analyzing",
+    "Not a Bid Document": "Not a Bid Document — Re-upload Needed",
     "Clarifications Sent": "Awaiting Client Clarification",
     "Responses Pending": "Responses Pending",
+    "Awaiting Assumptions Approval": "Review Assumptions",
+    "Awaiting Preview": "Review & Customize Proposal",
     "Ready to Generate": "Ready for Review",
     "Submitted": "Submitted",
     "Declined": "Declined",
+    "Cancelled": "Cancelled",
 }
 
 # The order the pipeline actually moves projects through — drives the project-detail stepper.
 # (The Home page's "how it works" panel is a separate, static explainer of the conceptual
 # document-processing stages, not this per-project status sequence — see templates/home.html.)
-STATUS_ORDER = ["Analyzing", "Clarifications Sent", "Responses Pending", "Ready to Generate", "Submitted"]
+# "Not a Bid Document" and "Cancelled" are terminal/branch statuses handled separately by the
+# stepper (see terminal_branch_statuses in project_detail.html), not part of this main sequence.
+STATUS_ORDER = [
+    "Analyzing",
+    "Clarifications Sent",
+    "Responses Pending",
+    "Awaiting Assumptions Approval",
+    "Awaiting Preview",
+    "Ready to Generate",
+    "Submitted",
+]
+
+TERMINAL_BRANCH_STATUSES = {"Not a Bid Document", "Declined", "Cancelled"}
 
 
 def _enrich_project(p: dict) -> dict:
@@ -107,6 +139,20 @@ def _ctx(request: Request, **extra) -> dict:
         "demo_mode": DEMO_MODE,
         **extra,
     }
+
+
+def _get_project_or_403(project_id: str, user: dict, allow_deleted: bool = False) -> dict:
+    """Fetches a project and enforces per-user access: admins always pass; a member only passes
+    if they created the project or an admin explicitly granted them access (db.project_access).
+    Returns 404 rather than 403 for an unauthorized member, matching the existing soft-delete
+    404 behavior — this deliberately avoids confirming to a member that a project ID exists at
+    all when they have no access to it."""
+    project = db.get_project(project_id)
+    if not project or (project["deleted_at"] and not allow_deleted):
+        raise HTTPException(404, "Project not found.")
+    if not db.user_can_access_project(user, project):
+        raise HTTPException(404, "Project not found.")
+    return project
 
 
 async def _read_capped(file: UploadFile, max_bytes: int) -> bytes:
@@ -176,15 +222,16 @@ def logout(request: Request, _: None = Depends(auth.verify_csrf)):
 @app.get("/home", response_class=HTMLResponse)
 def home(request: Request):
     user = auth.current_user(request)
-    projects = [_enrich_project(p) for p in db.list_projects()]
+    projects = [_enrich_project(p) for p in db.list_projects_for_user(user)]
 
     awaiting_client = sum(1 for p in projects if p["status"] in ("Clarifications Sent", "Responses Pending"))
-    in_review = sum(1 for p in projects if p["status"] in ("Analyzing", "Ready to Generate"))
+    in_review = sum(1 for p in projects if p["status"] in
+                    ("Analyzing", "Awaiting Assumptions Approval", "Awaiting Preview", "Ready to Generate"))
     submitted = sum(1 for p in projects if p["status"] == "Submitted")
     needs_attention = sum(1 for p in projects if p.get("error_message"))
 
     recent_projects = projects[:5]
-    recent_activity = db.list_audit_log(limit=8)
+    recent_activity = db.list_audit_log_for_user(user, limit=8)
 
     return templates.TemplateResponse(request, "home.html", _ctx(request,
         total_projects=len(projects),
@@ -201,7 +248,8 @@ def home(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
-    projects = [_enrich_project(p) for p in db.list_projects()]
+    user = auth.current_user(request)
+    projects = [_enrich_project(p) for p in db.list_projects_for_user(user)]
     return templates.TemplateResponse(request, "dashboard.html", _ctx(request, projects=projects))
 
 
@@ -245,9 +293,8 @@ async def create_project(
 
 @app.get("/projects/{project_id}", response_class=HTMLResponse)
 def project_detail(request: Request, project_id: str):
-    project = db.get_project(project_id)
-    if not project or project["deleted_at"]:
-        raise HTTPException(404, "Project not found.")
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
     project = _enrich_project(project)
     documents = db.list_documents(project_id)
 
@@ -255,24 +302,31 @@ def project_detail(request: Request, project_id: str):
     if project.get("phase1_result_json"):
         requirements = json.loads(project["phase1_result_json"])["requirements"]
 
+    assumption_items = [r for r in requirements if r["status"] == "assumption_needed"]
+
     capability_fit = None
     if project.get("capability_fit_json"):
         capability_fit = json.loads(project["capability_fit_json"])
 
     compliance_matrix = []
     pricing = None
+    preview_content = None
     if project.get("phase4_content_json"):
         content = json.loads(project["phase4_content_json"])
         compliance_matrix = content.get("compliance_matrix", [])
         pricing = content.get("pricing")
+        if project["status"] == "Awaiting Preview":
+            preview_content = content
 
     return templates.TemplateResponse(request, "project_detail.html", _ctx(request,
         project=project,
         documents=documents,
         requirements=requirements,
+        assumption_items=assumption_items,
         capability_fit=capability_fit,
         compliance_matrix=compliance_matrix,
         pricing=pricing,
+        preview_content=preview_content,
         can_upload_responses=project["status"] in ("Clarifications Sent", "Responses Pending"),
     ))
 
@@ -286,9 +340,7 @@ async def upload_responses(
     _: None = Depends(auth.verify_csrf),
 ):
     user = auth.current_user(request)
-    project = db.get_project(project_id)
-    if not project:
-        raise HTTPException(404, "Project not found.")
+    project = _get_project_or_403(project_id, user)
 
     try:
         content = await _read_capped(responses_file, storage.MAX_UPLOAD_BYTES)
@@ -316,6 +368,7 @@ def download_document(request: Request, project_id: str, doc_id: str):
     doc = db.get_document(doc_id)
     if not doc or doc["project_id"] != project_id:
         raise HTTPException(404, "Document not found.")
+    _get_project_or_403(project_id, user)
 
     # Decrypted straight into memory and streamed back — no plaintext temp file is written to
     # disk at all (the old version wrote one to GENERATED_DIR and never deleted it).
@@ -331,16 +384,14 @@ def download_document(request: Request, project_id: str, doc_id: str):
     )
 
 
-def _require_ready_to_generate(project_id: str) -> dict:
-    """Every status up to 'Ready to Generate' is set by the pipeline itself, not by a person —
-    Analyzing/Clarifications Sent/Responses Pending all flip automatically as processing moves
-    forward (see pipeline_runner.py). The one point that genuinely needs a human call is once
-    the compliance matrix and pricing are ready: someone has to decide whether to actually
-    submit. That's the only manual state change this app allows, so both routes below re-check
-    the current status server-side rather than trusting whatever the form said."""
-    project = db.get_project(project_id)
-    if not project or project["deleted_at"]:
-        raise HTTPException(404, "Project not found.")
+def _require_ready_to_generate(project_id: str, user: dict) -> dict:
+    """'Ready to Generate' now means: the user finalized the editable preview and a final .docx
+    has actually been built (see pipeline_runner.py::finalize_proposal). Everything before that
+    — Analyzing, the assumptions gate, the preview itself — flips automatically or by the user's
+    own preview/assumptions actions; approve/reject is the one remaining manual decision, so both
+    routes below re-check the current status (and the caller's access) server-side rather than
+    trusting whatever the form said."""
+    project = _get_project_or_403(project_id, user)
     if project["status"] != "Ready to Generate":
         raise HTTPException(400, "This project isn't at the review step yet — there's nothing to approve or reject.")
     return project
@@ -349,7 +400,7 @@ def _require_ready_to_generate(project_id: str) -> dict:
 @app.post("/projects/{project_id}/approve")
 def approve_project(request: Request, project_id: str, _: None = Depends(auth.verify_csrf)):
     user = auth.current_user(request)
-    _require_ready_to_generate(project_id)
+    _require_ready_to_generate(project_id, user)
     db.update_project(project_id, status="Submitted")
     db.log_action("project_approved", project_id, user_identity=user["username"])
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
@@ -358,15 +409,198 @@ def approve_project(request: Request, project_id: str, _: None = Depends(auth.ve
 @app.post("/projects/{project_id}/reject")
 def reject_project(request: Request, project_id: str, _: None = Depends(auth.verify_csrf)):
     user = auth.current_user(request)
-    _require_ready_to_generate(project_id)
+    _require_ready_to_generate(project_id, user)
     db.update_project(project_id, status="Declined")
     db.log_action("project_declined", project_id, user_identity=user["username"])
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+@app.post("/projects/{project_id}/reupload")
+async def reupload_bid_document(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    project_id: str,
+    bid_file: UploadFile = File(...),
+    _: None = Depends(auth.verify_csrf),
+):
+    """Lets the user re-upload a different file to the same project after a 'Not a Bid Document'
+    halt, and re-runs process_new_upload from scratch on it — the same entry point a brand new
+    project uses, so the new file gets its own validity check, its own Phase 1, etc."""
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if project["status"] != "Not a Bid Document":
+        raise HTTPException(400, "This project isn't waiting on a re-upload.")
+
+    try:
+        content = await _read_capped(bid_file, storage.MAX_UPLOAD_BYTES)
+        if not content:
+            raise HTTPException(400, "Uploaded file is empty.")
+        extension = storage.validate_extension(bid_file.filename, storage.ALLOWED_UPLOAD_EXTENSIONS)
+    except storage.UnsupportedFileType as e:
+        raise HTTPException(400, str(e)) from e
+    except storage.UploadTooLarge as e:
+        raise HTTPException(413, str(e)) from e
+
+    display_name, stored_path, encrypted = storage.save_upload(project_id, bid_file.filename, content)
+    db.add_document(project_id, "bid_invitation", display_name, stored_path, encrypted)
+    db.log_action("project_reuploaded", project_id, {"filename": display_name}, user_identity=user["username"])
+
+    # Defensively reset — Phase 1 never actually ran on the rejected attempt, but this keeps the
+    # project row clean of anything stale from before the re-upload.
+    db.update_project(
+        project_id,
+        status="Analyzing",
+        error_message=None,
+        validity_rejection_reason=None,
+        phase1_result_json=None,
+        capability_fit_json=None,
+    )
+    background_tasks.add_task(process_new_upload, project_id, content, extension)
+
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+@app.post("/projects/{project_id}/assumptions/accept")
+def accept_assumptions(request: Request, project_id: str, _: None = Depends(auth.verify_csrf)):
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if project["status"] != "Awaiting Assumptions Approval":
+        raise HTTPException(400, "This project isn't waiting on an assumptions decision.")
+    db.update_project(project_id, status="Awaiting Preview")
+    db.log_action("assumptions_accepted", project_id, user_identity=user["username"])
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+@app.post("/projects/{project_id}/assumptions/cancel")
+def cancel_assumptions(request: Request, project_id: str, _: None = Depends(auth.verify_csrf)):
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if project["status"] != "Awaiting Assumptions Approval":
+        raise HTTPException(400, "This project isn't waiting on an assumptions decision.")
+    db.update_project(project_id, status="Cancelled")
+    db.log_action("assumptions_cancelled", project_id, user_identity=user["username"])
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+_EDITABLE_NARRATIVE_FIELDS = ["executive_summary", "understanding", "technology_approach",
+                              "past_performance", "closing"]
+
+
+@app.post("/projects/{project_id}/preview/generate")
+async def generate_final_proposal(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    project_id: str,
+    _: None = Depends(auth.verify_csrf),
+):
+    """The editable-preview submit route. Reassembles the persisted phase4_content_json with
+    whatever the user edited — narrative text, the assumptions list, staffing/timeline/compliance
+    tables — recomputes pricing from the (possibly edited) staffing numbers, optionally stores an
+    uploaded custom template, and hands everything to finalize_proposal() as a background task
+    (it does real work: building the docx and uploading it)."""
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if project["status"] != "Awaiting Preview":
+        raise HTTPException(400, "This project isn't at the preview/customize step.")
+    if not project.get("phase4_content_json"):
+        raise HTTPException(400, "No generated content found to preview.")
+
+    form = await request.form()
+    content = json.loads(project["phase4_content_json"])
+
+    for field in _EDITABLE_NARRATIVE_FIELDS:
+        if field in form:
+            content[field] = str(form[field])
+
+    if "assumptions" in form:
+        content["assumptions"] = [line.strip() for line in str(form["assumptions"]).split("\n") if line.strip()]
+
+    # Staffing/pricing: role and hourly_rate are read-only (tied to the rate card); only
+    # headcount and hours_per_person are user-editable. Recomputing via the same deterministic
+    # pricing engine used by Phase 3 keeps total_hours/subtotal/labor_subtotal/contingency/total
+    # arithmetically consistent no matter what the user changed.
+    staffing_row_count = int(form.get("staffing_row_count", 0) or 0)
+    if staffing_row_count:
+        edited_staffing_plan = []
+        for i in range(staffing_row_count):
+            role = form.get(f"staffing_role_{i}")
+            if not role:
+                continue
+            edited_staffing_plan.append({
+                "role": str(role),
+                "headcount": int(form.get(f"staffing_headcount_{i}", 0) or 0),
+                "hours_per_person": int(form.get(f"staffing_hours_per_person_{i}", 0) or 0),
+            })
+        if edited_staffing_plan:
+            pricing = recompute_staffing_and_pricing(edited_staffing_plan)
+            content["pricing"] = pricing
+            content["staffing"] = pricing["lines"]
+
+    # Timeline: phase/duration/description are all free text, no arithmetic involved.
+    timeline_row_count = int(form.get("timeline_row_count", 0) or 0)
+    if timeline_row_count:
+        edited_timeline = []
+        for i in range(timeline_row_count):
+            phase = form.get(f"timeline_phase_{i}")
+            if not phase:
+                continue
+            edited_timeline.append({
+                "phase": str(phase),
+                "duration": str(form.get(f"timeline_duration_{i}", "")),
+                "description": str(form.get(f"timeline_description_{i}", "")),
+            })
+        if edited_timeline:
+            content["timeline"] = edited_timeline
+
+    # Compliance matrix: requirement_id/requirement stay tied to the actual extracted
+    # requirements (read-only); only the response text and status are editable.
+    compliance_row_count = int(form.get("compliance_row_count", 0) or 0)
+    if compliance_row_count:
+        existing_matrix = content.get("compliance_matrix", [])
+        edited_matrix = []
+        for i in range(compliance_row_count):
+            if i >= len(existing_matrix):
+                break
+            entry = dict(existing_matrix[i])
+            if f"compliance_response_{i}" in form:
+                entry["response"] = str(form[f"compliance_response_{i}"])
+            if f"compliance_status_{i}" in form:
+                entry["status"] = str(form[f"compliance_status_{i}"])
+            edited_matrix.append(entry)
+        if edited_matrix:
+            content["compliance_matrix"] = edited_matrix
+
+    template_choice = str(form.get("template_choice", "default"))
+    if template_choice not in ("default", "custom"):
+        template_choice = "default"
+
+    custom_template_bytes = None
+    if template_choice == "custom":
+        custom_template = form.get("custom_template")
+        if not isinstance(custom_template, UploadFile) or not custom_template.filename:
+            raise HTTPException(400, "Please upload a .docx template, or choose the default template.")
+        try:
+            storage.validate_extension(custom_template.filename, {".docx"})
+        except storage.UnsupportedFileType as e:
+            raise HTTPException(400, str(e)) from e
+        custom_template_bytes = await _read_capped(custom_template, storage.MAX_UPLOAD_BYTES)
+        display_name, stored_path, encrypted = storage.save_upload(
+            project_id, custom_template.filename, custom_template_bytes
+        )
+        db.add_document(project_id, "custom_template", display_name, stored_path, encrypted)
+
+    db.update_project(project_id, template_choice=template_choice)
+    db.log_action("preview_submitted", project_id, {"template_choice": template_choice},
+                  user_identity=user["username"])
+    background_tasks.add_task(finalize_proposal, project_id, content, template_choice, custom_template_bytes)
+
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
 @app.post("/projects/{project_id}/delete")
 def delete_project(request: Request, project_id: str, _: None = Depends(auth.verify_csrf)):
     user = auth.current_user(request)
+    _get_project_or_403(project_id, user)
     db.soft_delete_project(project_id)
     db.log_action("project_deleted", project_id, user_identity=user["username"])
     return RedirectResponse("/", status_code=303)
@@ -374,20 +608,33 @@ def delete_project(request: Request, project_id: str, _: None = Depends(auth.ver
 
 @app.get("/audit", response_class=HTMLResponse)
 def audit_log(request: Request):
-    entries = db.list_audit_log()
+    user = auth.current_user(request)
+    entries = db.list_audit_log_for_user(user)
     return templates.TemplateResponse(request, "audit.html", _ctx(request, entries=entries))
 
 
 # ---------- Admin: user management ----------
 
+def _admin_users_ctx(request: Request, error: str | None = None) -> dict:
+    users = db.list_users()
+    return _ctx(
+        request,
+        users=users,
+        projects=db.list_projects(),
+        user_access={u["id"]: db.list_accessible_project_ids(u["id"]) for u in users},
+        error=error,
+    )
+
+
 @app.get("/admin/users", response_class=HTMLResponse)
 def admin_users(request: Request):
-    return templates.TemplateResponse(request, "admin_users.html", _ctx(request, users=db.list_users(), error=None))
+    return templates.TemplateResponse(request, "admin_users.html", _admin_users_ctx(request))
 
 
 @app.post("/admin/users")
 def admin_create_user(request: Request, username: str = Form(...), password: str = Form(...),
-                       role: str = Form("member"), _: None = Depends(auth.verify_csrf)):
+                       role: str = Form("member"), project_ids: list[str] = Form([]),
+                       _: None = Depends(auth.verify_csrf)):
     admin_user = auth.current_user(request)
     username = username.strip().lower()
     role = role if role in ("admin", "member") else "member"
@@ -402,10 +649,26 @@ def admin_create_user(request: Request, username: str = Form(...), password: str
 
     if error:
         return templates.TemplateResponse(request, "admin_users.html",
-                                           _ctx(request, users=db.list_users(), error=error), status_code=400)
+                                           _admin_users_ctx(request, error=error), status_code=400)
 
-    db.create_user(username, auth.hash_password(password), role=role, created_by=admin_user["username"])
-    db.log_action("user_created", detail={"new_username": username, "role": role}, user_identity=admin_user["username"])
+    new_user_id = db.create_user(username, auth.hash_password(password), role=role, created_by=admin_user["username"])
+    if project_ids:
+        db.set_user_project_access(new_user_id, project_ids, granted_by=admin_user["username"])
+    db.log_action("user_created", detail={"new_username": username, "role": role, "project_ids": project_ids},
+                  user_identity=admin_user["username"])
+    return RedirectResponse("/admin/users", status_code=303)
+
+
+@app.post("/admin/users/{user_id}/access")
+def admin_update_user_access(request: Request, user_id: str, project_ids: list[str] = Form([]),
+                              _: None = Depends(auth.verify_csrf)):
+    admin_user = auth.current_user(request)
+    target = db.get_user(user_id)
+    if not target:
+        raise HTTPException(404, "User not found.")
+    db.set_user_project_access(user_id, project_ids, granted_by=admin_user["username"])
+    db.log_action("user_access_updated", detail={"target_username": target["username"], "project_ids": project_ids},
+                  user_identity=admin_user["username"])
     return RedirectResponse("/admin/users", status_code=303)
 
 
