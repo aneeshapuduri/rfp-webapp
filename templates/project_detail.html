@@ -16,22 +16,27 @@
 </div>
 
 <div class="card">
-    {% set steps = ["Analyzing", "Clarifications Sent", "Responses Pending", "Ready to Generate", "Submitted"] %}
-    {% set display_status = "Submitted" if project.status == "Declined" else project.status %}
+    {% set steps = ["Analyzing", "Clarifications Sent", "Responses Pending", "Awaiting Assumptions Approval", "Awaiting Preview", "Ready to Generate", "Submitted"] %}
+    {# Terminal/branch statuses each replace one step in the sequence above with a ✕ instead of
+       progressing further — "Not a Bid Document" branches right after Analyzing, "Cancelled"
+       branches at the assumptions decision, "Declined" branches at the very end. #}
+    {% set terminal_branch_index = {"Not a Bid Document": 0, "Cancelled": 3, "Declined": 6} %}
+    {% set is_terminal_branch = project.status in terminal_branch_index %}
+    {% set display_status = steps[terminal_branch_index[project.status]] if is_terminal_branch else project.status %}
     {% set ns = namespace(current_index=-1) %}
     {% for s in steps %}{% if s == display_status %}{% set ns.current_index = loop.index0 %}{% endif %}{% endfor %}
     <div class="stepper">
         {% for s in steps %}
-        {% set is_declined_step = project.status == "Declined" and loop.index0 == 4 %}
-        <div class="step {% if is_declined_step %}is-declined{% elif ns.current_index >= 0 and loop.index0 < ns.current_index %}is-done{% elif loop.index0 == ns.current_index %}is-current{% endif %}">
+        {% set is_branch_step = is_terminal_branch and loop.index0 == ns.current_index %}
+        <div class="step {% if is_branch_step %}is-declined{% elif ns.current_index >= 0 and loop.index0 < ns.current_index %}is-done{% elif loop.index0 == ns.current_index %}is-current{% endif %}">
             <div class="step__line"></div>
             <div class="step__dot">
-                {%- if is_declined_step %}✕
+                {%- if is_branch_step %}✕
                 {%- elif ns.current_index >= 0 and loop.index0 < ns.current_index %}✓
                 {%- else %}{{ loop.index }}
                 {%- endif %}
             </div>
-            <div class="step__label">{{ "Declined" if is_declined_step else s }}</div>
+            <div class="step__label">{{ project.status if is_branch_step else s }}</div>
         </div>
         {% endfor %}
     </div>
@@ -44,6 +49,26 @@
         <div>
             <div class="status-panel__title" style="color:var(--danger);">Stopped — processing hit an error</div>
             <div class="status-panel__text">Automatic processing has halted and needs attention before it can continue. See the error below.</div>
+        </div>
+
+        {% elif project.status == "Not a Bid Document" %}
+        <span class="status-panel__icon status-panel__icon--stopped" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        </span>
+        <div style="flex:1;">
+            <div class="status-panel__title" style="color:var(--danger);">This doesn't look like a bid/RFP document</div>
+            <div class="status-panel__text">
+                {{ project.validity_rejection_reason or "The uploaded file doesn't appear to be a bid or RFP solicitation." }}
+                Upload the correct bid invitation document below to try again — no need to start a new project.
+            </div>
+            <form action="/projects/{{ project.id }}/reupload" method="post" enctype="multipart/form-data" class="upload-form" style="margin-top:12px;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div class="form-field">
+                    <label for="bid_file">Bid invitation document</label>
+                    <input type="file" id="bid_file" name="bid_file" accept=".pdf,.docx,.txt" required>
+                </div>
+                <button type="submit" class="btn-primary">Upload &amp; Re-check</button>
+            </form>
         </div>
 
         {% elif project.status in ("Analyzing", "Responses Pending") %}
@@ -65,6 +90,52 @@
         <div>
             <div class="status-panel__title">Paused — waiting on the client</div>
             <div class="status-panel__text">Clarification questions have been sent. Upload their filled-in answers below to resume automatically.</div>
+        </div>
+
+        {% elif project.status == "Awaiting Assumptions Approval" %}
+        <span class="status-panel__icon status-panel__icon--decision" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </span>
+        <div style="flex:1;">
+            <div class="status-panel__title">Review the assumptions before continuing</div>
+            <div class="status-panel__text">To fill gaps the RFP didn't specify, the following assumptions were made. Accept them to continue to the proposal preview, or cancel this bid if they aren't acceptable.</div>
+            {% if assumption_items %}
+            <ul class="fit-list" style="margin-top:12px;">
+                {% for r in assumption_items %}
+                <li class="fit-row">
+                    <span class="fit-row__icon" aria-hidden="true">~</span>
+                    <div>
+                        <span class="fit-row__area">{{ r.requirement }}</span><br>
+                        <em>Assumed:</em> {{ r.assumption_text }}
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+            <div class="decision-actions">
+                <form action="/projects/{{ project.id }}/assumptions/accept" method="post" class="inline-form"
+                      onsubmit="return confirm('Accept these assumptions and continue to the proposal preview?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn-primary btn-approve">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                        Accept &amp; Continue
+                    </button>
+                </form>
+                <form action="/projects/{{ project.id }}/assumptions/cancel" method="post" class="inline-form"
+                      onsubmit="return confirm(&quot;Cancel this bid? The assumptions won't be accepted and no proposal will be generated.&quot;);">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn-danger">Cancel</button>
+                </form>
+            </div>
+        </div>
+
+        {% elif project.status == "Awaiting Preview" %}
+        <span class="status-panel__icon status-panel__icon--decision" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>
+        </span>
+        <div>
+            <div class="status-panel__title">Ready for your review</div>
+            <div class="status-panel__text">The generated proposal is ready to review and customize below. Edit any section, choose a template, then generate the final document.</div>
         </div>
 
         {% elif project.status == "Ready to Generate" %}
@@ -102,6 +173,12 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
         </span>
         <div class="status-panel__title" style="color:var(--danger);">Declined — this project was not pursued.</div>
+
+        {% elif project.status == "Cancelled" %}
+        <span class="status-panel__icon status-panel__icon--stopped" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        </span>
+        <div class="status-panel__title" style="color:var(--danger);">Cancelled — the assumptions made for this bid were not accepted.</div>
         {% endif %}
     </div>
 </div>
@@ -203,6 +280,108 @@
                 <input type="file" id="responses_file" name="responses_file" accept=".docx" required>
             </div>
             <button type="submit" class="btn-primary">Upload &amp; Resume</button>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+{% if project.status == "Awaiting Preview" and preview_content %}
+<div class="card" aria-labelledby="preview-heading">
+    <div class="card__head"><h2 id="preview-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg> Review &amp; Customize Proposal</h2></div>
+    <div class="card__body">
+        <form action="/projects/{{ project.id }}/preview/generate" method="post" enctype="multipart/form-data" class="upload-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <div class="form-field">
+                <label for="executive_summary">Executive Summary</label>
+                <textarea id="executive_summary" name="executive_summary" rows="6" style="width:100%;">{{ preview_content.executive_summary }}</textarea>
+            </div>
+            <div class="form-field">
+                <label for="understanding">Understanding of the Problem</label>
+                <textarea id="understanding" name="understanding" rows="6" style="width:100%;">{{ preview_content.understanding }}</textarea>
+            </div>
+            <div class="form-field">
+                <label for="technology_approach">Technical Approach and Methodology</label>
+                <textarea id="technology_approach" name="technology_approach" rows="6" style="width:100%;">{{ preview_content.technology_approach }}</textarea>
+            </div>
+            <div class="form-field">
+                <label for="assumptions">Assumptions (one per line)</label>
+                <textarea id="assumptions" name="assumptions" rows="4" style="width:100%;">{{ preview_content.assumptions | join('\n') }}</textarea>
+            </div>
+            <div class="form-field">
+                <label for="past_performance">Relevant Past Performance</label>
+                <textarea id="past_performance" name="past_performance" rows="6" style="width:100%;">{{ preview_content.past_performance }}</textarea>
+            </div>
+            <div class="form-field">
+                <label for="closing">Closing Statement</label>
+                <textarea id="closing" name="closing" rows="4" style="width:100%;">{{ preview_content.closing }}</textarea>
+            </div>
+
+            <h3>Proposed Team &amp; Staffing Plan</h3>
+            <input type="hidden" name="staffing_row_count" value="{{ preview_content.staffing | length }}">
+            <table class="requirements-table">
+                <thead><tr><th scope="col">Role</th><th scope="col">Headcount</th><th scope="col">Hours/Person</th><th scope="col">Rate</th></tr></thead>
+                <tbody>
+                    {% for l in preview_content.staffing %}
+                    <tr>
+                        <td>{{ l.role }}<input type="hidden" name="staffing_role_{{ loop.index0 }}" value="{{ l.role }}"></td>
+                        <td><input type="number" min="0" name="staffing_headcount_{{ loop.index0 }}" value="{{ l.headcount }}" style="width:5em;"></td>
+                        <td><input type="number" min="0" name="staffing_hours_per_person_{{ loop.index0 }}" value="{{ l.hours_per_person }}" style="width:6em;"></td>
+                        <td>${{ "{:,.2f}".format(l.hourly_rate) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <p class="coverage-note">Role and hourly rate come from our standard rate card and aren't editable here. Total hours, subtotals, and the overall total are recalculated automatically from headcount and hours/person when you generate the document.</p>
+
+            <h3>Proposed Project Timeline</h3>
+            <input type="hidden" name="timeline_row_count" value="{{ preview_content.timeline | length }}">
+            <table class="requirements-table">
+                <thead><tr><th scope="col">Phase</th><th scope="col">Duration</th><th scope="col">Description</th></tr></thead>
+                <tbody>
+                    {% for p in preview_content.timeline %}
+                    <tr>
+                        <td><input type="text" name="timeline_phase_{{ loop.index0 }}" value="{{ p.phase }}"></td>
+                        <td><input type="text" name="timeline_duration_{{ loop.index0 }}" value="{{ p.duration }}" style="width:8em;"></td>
+                        <td><input type="text" name="timeline_description_{{ loop.index0 }}" value="{{ p.description }}" style="width:100%;"></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <h3>Compliance Matrix</h3>
+            <input type="hidden" name="compliance_row_count" value="{{ preview_content.compliance_matrix | length }}">
+            <table class="compliance-table">
+                <thead><tr><th scope="col">Requirement</th><th scope="col">Our Response</th><th scope="col">Status</th></tr></thead>
+                <tbody>
+                    {% for m in preview_content.compliance_matrix %}
+                    <tr>
+                        <td>{{ m.requirement }}</td>
+                        <td><textarea name="compliance_response_{{ loop.index0 }}" rows="2" style="width:100%;">{{ m.response }}</textarea></td>
+                        <td>
+                            <select name="compliance_status_{{ loop.index0 }}">
+                                {% for opt in ["Full Compliance", "Partial Compliance", "Does Not Comply"] %}
+                                <option value="{{ opt }}" {% if m.status == opt %}selected{% endif %}>{{ opt }}</option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <h3>Template</h3>
+            <div class="form-field">
+                <label><input type="radio" name="template_choice" value="default" checked onclick="document.getElementById('custom-template-field').hidden = true;"> Use the default template</label><br>
+                <label><input type="radio" name="template_choice" value="custom" onclick="document.getElementById('custom-template-field').hidden = false;"> Upload my own template</label>
+            </div>
+            <div class="form-field" id="custom-template-field" hidden>
+                <label for="custom_template">Custom .docx template</label>
+                <input type="file" id="custom_template" name="custom_template" accept=".docx">
+                <p class="coverage-note">We'll match your template's headings to our standard sections and insert generated content under each. Any section we can't confidently match will be added at the end under "Needs Manual Placement."</p>
+            </div>
+
+            <button type="submit" class="btn-primary" onclick="return confirm('Generate the final document with these edits?');">Generate Final Document</button>
         </form>
     </div>
 </div>

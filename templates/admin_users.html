@@ -4,8 +4,10 @@
 <div class="page-head">
     <div>
         <h1>Users</h1>
-        <p>Every account can see and work every project — the difference is that <strong>admin</strong> accounts
-           can also manage users here. Actions are attributed to the real account in the <a href="/audit">audit log</a>.</p>
+        <p><strong>Admin</strong> accounts can see and work every project, and can also manage users here.
+           <strong>Member</strong> accounts can only see and work projects an admin has explicitly granted them,
+           plus any project they created themselves. Actions are attributed to the real account in the
+           <a href="/audit">audit log</a>.</p>
     </div>
 </div>
 
@@ -29,6 +31,7 @@
                 <th scope="col">Role</th>
                 <th scope="col">Status</th>
                 <th scope="col">Created</th>
+                <th scope="col">Project Access</th>
                 <th scope="col" style="text-align:right;">Actions</th>
             </tr>
         </thead>
@@ -60,6 +63,33 @@
                     {% endif %}
                 </td>
                 <td class="cell-muted">{{ u.created_at[:10] }}</td>
+                <td>
+                    {% if u.role == "admin" %}
+                    <span class="doc-meta">All projects</span>
+                    {% else %}
+                    {% set granted_ids = user_access.get(u.id, []) %}
+                    <details>
+                        <summary class="doc-meta" style="cursor:pointer;">
+                            {{ granted_ids | length }} project{{ "s" if granted_ids | length != 1 else "" }} granted
+                            &nbsp;(+ projects they created)
+                        </summary>
+                        <form action="/admin/users/{{ u.id }}/access" method="post" style="margin-top:8px; max-width:320px;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <div style="max-height:160px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; padding:8px; margin-bottom:8px;">
+                                {% for p in projects %}
+                                <label style="display:block; font-weight:400; font-size:13px; padding:2px 0;">
+                                    <input type="checkbox" name="project_ids" value="{{ p.id }}" {% if p.id in granted_ids %}checked{% endif %}>
+                                    {{ p.name }}
+                                </label>
+                                {% else %}
+                                <span class="doc-meta">No projects exist yet.</span>
+                                {% endfor %}
+                            </div>
+                            <button type="submit" class="btn-ghost btn-small">Save access</button>
+                        </form>
+                    </details>
+                    {% endif %}
+                </td>
                 <td>
                     {% if u.id != current_user.id %}
                     <div style="display:flex; gap:8px; justify-content:flex-end;">
@@ -113,9 +143,23 @@
             <div class="form-field">
                 <label for="role">Role</label>
                 <select id="role" name="role">
-                    <option value="member">Member — full access to projects</option>
+                    <option value="member">Member — access limited to granted/created projects</option>
                     <option value="admin">Admin — full access, plus user management</option>
                 </select>
+            </div>
+            <div class="form-field">
+                <label>Grant access to these projects</label>
+                <p class="coverage-note" style="margin-top:0;">Optional for members (they can also always access
+                   projects they create themselves), and irrelevant for admins, who always have full access.</p>
+                <div style="max-height:200px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; padding:8px;">
+                    {% for p in projects %}
+                    <label style="display:block; font-weight:400; font-size:13px; padding:2px 0;">
+                        <input type="checkbox" name="project_ids" value="{{ p.id }}"> {{ p.name }}
+                    </label>
+                    {% else %}
+                    <span class="doc-meta">No projects exist yet.</span>
+                    {% endfor %}
+                </div>
             </div>
             <button type="submit" class="btn-primary">Create user</button>
         </form>
