@@ -698,13 +698,51 @@ def retry_processing(request: Request, background_tasks: BackgroundTasks, projec
 
 
 @app.post("/projects/{project_id}/assumptions/accept")
-def accept_assumptions(request: Request, project_id: str, _: None = Depends(auth.verify_csrf)):
+async def accept_assumptions(request: Request, project_id: str, _: None = Depends(auth.verify_csrf)):
+    """Applies any edits made on the Review Assumptions screen before continuing. Each
+    assumption's (possibly rewritten) text is written back into phase1_result_json — so the
+    Requirements table and every other view of this project reflect the edit too — and
+    phase4_content_json's `assumptions` list is rebuilt from those updated requirements using
+    the exact same filter phase3_pipeline.run_phase3 used to build it originally (every
+    requirement with a non-empty assumption_text, in requirement order). That's the same list
+    document_builder._render_general_assumptions writes into the final .docx, so the edited
+    wording — not the original AI-drafted wording — is what actually reaches the document."""
     user = auth.current_user(request)
     project = _get_project_or_403(project_id, user)
     if project["status"] != "Awaiting Assumptions Approval":
         raise HTTPException(400, "This project isn't waiting on an assumptions decision.")
-    db.update_project(project_id, status="Awaiting Preview")
-    db.log_action("assumptions_accepted", project_id, user_identity=user["username"])
+
+    form = await request.form()
+    row_count = int(form.get("assumption_row_count") or 0)
+    edited_text: dict[str, str] = {}
+    for i in range(row_count):
+        req_id = form.get(f"assumption_id_{i}")
+        text = form.get(f"assumption_text_{i}")
+        if req_id and text is not None:
+            edited_text[req_id] = text.strip()
+
+    fields: dict = {"status": "Awaiting Preview"}
+    edited_count = 0
+    if edited_text and project.get("phase1_result_json"):
+        result_dict = json.loads(project["phase1_result_json"])
+        for r in result_dict["requirements"]:
+            if r["id"] in edited_text:
+                if r.get("assumption_text") != edited_text[r["id"]]:
+                    edited_count += 1
+                r["assumption_text"] = edited_text[r["id"]]
+        fields["phase1_result_json"] = json.dumps(result_dict)
+
+        if project.get("phase4_content_json"):
+            content = json.loads(project["phase4_content_json"])
+            content["assumptions"] = [
+                r["assumption_text"] for r in result_dict["requirements"] if r.get("assumption_text")
+            ]
+            fields["phase4_content_json"] = json.dumps(content)
+
+    db.update_project(project_id, **fields)
+    db.log_action(
+        "assumptions_accepted", project_id, {"edited_count": edited_count}, user_identity=user["username"]
+    )
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
@@ -797,6 +835,22 @@ def _reassemble_preview_content(project: dict, form) -> dict:
             edited_matrix.append(entry)
         if edited_matrix:
             content["compliance_matrix"] = edited_matrix
+
+    # Extra RFP-requested sections (see extra_sections_prompts.py): title and content are both
+    # freely editable, and unchecking "include" for a row drops it from the final document
+    # entirely rather than generating it empty — a detected item can be a false positive, and
+    # this is the user's chance to say so before it ends up in a real proposal.
+    extra_section_row_count = int(form.get("extra_section_row_count", 0) or 0)
+    if extra_section_row_count:
+        edited_extra_sections = []
+        for i in range(extra_section_row_count):
+            if not form.get(f"extra_section_include_{i}"):
+                continue
+            title = str(form.get(f"extra_section_title_{i}", "")).strip()
+            body = str(form.get(f"extra_section_content_{i}", "")).strip()
+            if title and body:
+                edited_extra_sections.append({"title": title, "content": body})
+        content["extra_sections"] = edited_extra_sections
 
     return content
 
