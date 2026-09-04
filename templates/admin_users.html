@@ -23,6 +23,7 @@
         </h2>
         <span class="doc-meta">{{ users | length }} account{{ "s" if users | length != 1 else "" }}</span>
     </div>
+    <div class="table-scroll">
     <table class="user-table">
         <caption class="visually-hidden">Existing user accounts</caption>
         <thead>
@@ -120,6 +121,7 @@
             {% endfor %}
         </tbody>
     </table>
+    </div>
 </div>
 
 <div class="card">
