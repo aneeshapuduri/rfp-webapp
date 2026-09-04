@@ -236,6 +236,15 @@ h1 { color: var(--navy); }
 h2 { color: var(--navy); font-size: 1.05rem; }
 
 /* ---------- Table ---------- */
+/* A table with a nowrap status pill + a nowrap date column can need more width than its
+   card has (this is worst on the narrower "Recent Projects" widget on the home page,
+   where the card only gets 1.3fr of the row) — table-layout:auto plus those nowrap cells
+   creates a minimum content width wider than the card, and since .card clips overflow for
+   its rounded corners, the excess used to be silently cut off instead of shown (e.g. a
+   date rendering as just "202"). Wrapping the table in .table-scroll gives it its own
+   horizontal scrollbar instead, so content is always reachable, never invisibly clipped. */
+.table-scroll { overflow-x: auto; }
+.table-scroll > table { min-width: max-content; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 13px 22px; vertical-align: top; }
 th { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); background: #FAFBFD; border-bottom: 1px solid var(--border); white-space: nowrap; }
