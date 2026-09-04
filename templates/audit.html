@@ -33,8 +33,11 @@
     </div>
     {% if entries %}
     <div class="table-scroll">
-    <table class="audit-table">
+    <table class="audit-table table-fit">
         <caption class="visually-hidden">Audit log of {{ "automated system" if active_tab == "system" else "user" }} actions</caption>
+        <colgroup>
+            <col style="width:19%;"><col style="width:16%;"><col style="width:13%;"><col style="width:10%;"><col style="width:42%;">
+        </colgroup>
         <thead>
             <tr>
                 <th scope="col">Time (UTC)</th>
@@ -47,11 +50,11 @@
         <tbody>
             {% for e in entries %}
             <tr>
-                <td class="cell-muted" style="white-space:nowrap;">{{ e.timestamp[:19] | replace("T", " ") }}</td>
-                <td style="font-weight:600;">{{ e.user_identity or "system" }}</td>
+                <td class="cell-muted" style="white-space:nowrap;" title="{{ e.timestamp[:19] | replace('T', ' ') }}">{{ e.timestamp[:19] | replace("T", " ") }}</td>
+                <td class="cell-wrap" style="font-weight:600;" title="{{ e.user_identity or 'system' }}">{{ e.user_identity or "system" }}</td>
                 <td><span class="cap-chip">{{ e.action | replace('_', ' ') }}</span></td>
                 <td>{% if e.project_id %}<a href="/projects/{{ e.project_id }}">{{ e.project_id[:8] }}…</a>{% else %}<span class="cell-muted">&mdash;</span>{% endif %}</td>
-                <td>{% if e.detail %}<code>{{ e.detail }}</code>{% else %}<span class="cell-muted">—</span>{% endif %}</td>
+                <td>{% if e.detail %}<code class="cell-wrap">{{ e.detail }}</code>{% else %}<span class="cell-muted">—</span>{% endif %}</td>
             </tr>
             {% endfor %}
         </tbody>
