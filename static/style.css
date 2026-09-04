@@ -363,6 +363,21 @@ tr.clickable-row:hover td:first-child a { color: var(--accent); }
 
 .inline-form { display: inline-block; }
 
+/* ---------- Search box (list filtering) ---------- */
+.search-box {
+  display: flex; align-items: center; gap: 8px; max-width: 340px; margin-bottom: 16px;
+  padding: 9px 13px; border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+  background: #fff; transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+}
+.search-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3.5px var(--accent-soft); }
+.search-box svg { flex: none; color: var(--ink-faint); }
+.search-box input[type="search"] {
+  flex: 1; border: none; outline: none; font-size: .92rem; font-family: inherit; background: transparent; color: var(--ink);
+  min-width: 0;
+}
+.search-box input[type="search"]::-webkit-search-cancel-button { cursor: pointer; }
+.search-empty-note { color: var(--ink-faint); font-size: .88rem; padding: 14px 22px; }
+
 /* ---------- Forms ---------- */
 .form-field { margin-bottom: 20px; max-width: 480px; }
 .form-field label { display: block; font-weight: 600; font-size: .87rem; margin-bottom: 7px; color: var(--ink); }
