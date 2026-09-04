@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_icon %}
+{% block title %}Home — RFP Proposal Agent{% endblock %}
+{% block content %}
+<div class="home-hero">
+    <div class="home-hero__pattern" aria-hidden="true"></div>
+    <div class="home-hero__inner">
+        <span class="home-eyebrow"><span class="pulse-dot"></span>Signed in as {{ current_user.username }}</span>
+        <h1>Welcome back<span class="grad">.</span></h1>
+        <p>Here's where every bid invitation your team has uploaded currently stands, and what needs a look.</p>
+        <div class="home-hero__ctas">
+            <a href="/new" class="btn btn-lg btn-hero-primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                New Project
+            </a>
+            <a href="/" class="btn btn-lg btn-hero-ghost">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+                View All Projects
+            </a>
+        </div>
+    </div>
+</div>
+
+{% if needs_attention > 0 %}
+<div class="alert alert-error">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    <div>{{ needs_attention }} project{{ "s" if needs_attention != 1 else "" }} hit an error during processing and need a look — check the Projects list for the error flag.</div>
+</div>
+{% endif %}
+
+<div class="kpi-grid">
+    <div class="kpi kpi--navy">
+        <div class="kpi__icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+        <div class="kpi__value">{{ total_projects }}</div>
+        <div class="kpi__label">Total Projects</div>
+    </div>
+    <div class="kpi kpi--warning">
+        <div class="kpi__icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+        <div class="kpi__value">{{ awaiting_client }}</div>
+        <div class="kpi__label">Awaiting Client</div>
+    </div>
+    <div class="kpi kpi--accent">
+        <div class="kpi__icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20"/></svg></div>
+        <div class="kpi__value">{{ in_review }}</div>
+        <div class="kpi__label">In Review</div>
+    </div>
+    <div class="kpi kpi--success">
+        <div class="kpi__icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+        <div class="kpi__value">{{ submitted }}</div>
+        <div class="kpi__label">Submitted</div>
+    </div>
+</div>
+
+<div class="dash-grid">
+    <div class="card">
+        <div class="card__head">
+            <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Recent Projects</h2>
+            <a href="/" class="btn-link" style="text-decoration:none; font-size:.85rem; font-weight:600;">View all &rarr;</a>
+        </div>
+        {% if recent_projects %}
+        <div class="table-scroll">
+        <table class="table-fit">
+            <colgroup>
+                <col style="width:38%;"><col style="width:42%;"><col style="width:20%;">
+            </colgroup>
+            <tbody>
+                {% for p in recent_projects %}
+                <tr class="clickable-row">
+                    <td class="cell-truncate"><a href="/projects/{{ p.id }}" title="{{ p.name }}">{{ p.name }}</a></td>
+                    <td>
+                        <span class="status-pill status-pill--wrap status-{{ p.status | replace(' ', '-') | lower }}">
+                            {{ status_icon(p.status, p.error_message) }}
+                            {{ p.status_label }}
+                        </span>
+                    </td>
+                    <td class="cell-muted" style="white-space:nowrap; text-align:right;" title="{{ p.updated_at[:10] }}">{{ p.updated_at[:10] }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+            <p>No projects yet. <a href="/new">Upload your first bid invitation</a> to get started.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <div class="card__head">
+            <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Recent Activity</h2>
+            <a href="/audit" class="btn-link" style="text-decoration:none; font-size:.85rem; font-weight:600;">Full log &rarr;</a>
+        </div>
+        <div class="card__body">
+            {% if recent_activity %}
+            <ul class="feed">
+                {% for e in recent_activity %}
+                <li>
+                    <span class="feed__dot" aria-hidden="true"></span>
+                    <div>
+                        <div class="feed__text"><b>{{ e.user_identity or "system" }}</b> &mdash; {{ e.action | replace('_', ' ') }}</div>
+                        <div class="feed__time">{{ e.timestamp[:16] | replace("T", " ") }} UTC</div>
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p style="margin:0; color:var(--ink-faint);">No activity yet.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="card" style="margin-top:20px;">
+    <div class="card__head"><h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg> How the pipeline works</h2></div>
+    <div class="card__body">
+        <div class="showcase-pipeline">
+            <div class="sp-step">
+                <div class="sp-step__circle"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
+                <h4>Upload</h4>
+                <p>Bid invitation</p>
+            </div>
+            <div class="sp-step">
+                <div class="sp-step__line"></div>
+                <div class="sp-step__circle"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
+                <h4>Extract</h4>
+                <p>Every requirement</p>
+            </div>
+            <div class="sp-step">
+                <div class="sp-step__line"></div>
+                <div class="sp-step__circle"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+                <h4>Clarify</h4>
+                <p>If anything's unclear</p>
+            </div>
+            <div class="sp-step">
+                <div class="sp-step__line"></div>
+                <div class="sp-step__circle"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+                <h4>Design</h4>
+                <p>Solution &amp; pricing</p>
+            </div>
+            <div class="sp-step">
+                <div class="sp-step__line"></div>
+                <div class="sp-step__circle"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg></div>
+                <h4>Generate</h4>
+                <p>Final proposal</p>
+            </div>
+        </div>
+        <p class="pipeline-caption"><em>If a requirement is ambiguous, the pipeline pauses at Clarify and generates client-ready questions — it only continues to Design once answers come back or the analyst resolves it.</em></p>
+    </div>
+</div>
+{% endblock %}
