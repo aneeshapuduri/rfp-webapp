@@ -532,8 +532,30 @@ select.text-input, select {
 .kpi--success .kpi__icon { background: var(--success-bg); color: var(--success); }
 .kpi--navy .kpi__icon { background: var(--navy); color: #fff; }
 
-.dash-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; align-items: start; }
+/* align-items: stretch (grid's own default, restated for clarity) makes both cards match the
+   height of whichever has more content — previously align-items:start let each card shrink to
+   its own content, so a shorter Recent Projects list and a longer Recent Activity feed ended
+   up visibly different heights side by side. */
+.dash-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; align-items: stretch; }
+.dash-grid > .card { display: flex; flex-direction: column; }
+/* .card + .card normally adds vertical spacing between stacked cards (see below) — these two
+   cards are DOM siblings but laid out side by side, so that rule was also matching here,
+   pushing the second card down and (combined with align-items:stretch) making it render
+   shorter than the first by exactly that margin. The grid's own `gap` already spaces them. */
+.dash-grid > .card + .card { margin-top: 0; }
+.dash-grid > .card .table-scroll,
+.dash-grid > .card .card__body { flex: 1; }
 @media (max-width: 900px) { .dash-grid { grid-template-columns: 1fr; } }
+
+/* ---------- Tabs (Audit Log: User Logs / System Logs) ---------- */
+.tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
+.tab {
+  display: inline-flex; align-items: center; gap: 7px; padding: 10px 16px; font-size: .88rem; font-weight: 600;
+  color: var(--ink-soft); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color .15s var(--ease), border-color .15s var(--ease);
+}
+.tab:hover { color: var(--ink); }
+.tab--active { color: var(--accent); border-bottom-color: var(--accent); }
 
 .feed { list-style: none; margin: 0; padding: 0; }
 .feed li { display: flex; gap: 12px; padding: 11px 0; }
