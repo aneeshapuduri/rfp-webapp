@@ -286,9 +286,14 @@ tr.clickable-row:hover td:first-child a { color: var(--accent); }
 }
 .status-analyzing { background: var(--neutral-bg); color: var(--neutral); }
 .status-clarifications-sent, .status-responses-pending { background: var(--warning-bg); color: var(--warning); }
-.status-ready-to-generate { background: var(--decision-bg); color: var(--decision); }
+/* Awaiting Assumptions Approval / Awaiting Preview are both "paused for your team to review
+   and decide," the same kind of step as Ready to Generate — so they share its purple
+   "decision" color rather than the orange used for "waiting on the client" statuses above. */
+.status-awaiting-assumptions-approval, .status-awaiting-preview, .status-ready-to-generate { background: var(--decision-bg); color: var(--decision); }
 .status-submitted { background: var(--success-bg); color: var(--success); }
-.status-declined { background: var(--danger-bg); color: var(--danger); }
+/* Declined and Cancelled are both terminal "did not proceed" outcomes; Not a Bid Document is
+   a stopped/needs-attention state (re-upload required) — all three read as red. */
+.status-declined, .status-cancelled, .status-not-a-bid-document { background: var(--danger-bg); color: var(--danger); }
 .pulse-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.6s ease-in-out infinite; display: inline-block; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
 @keyframes spin { to { transform: rotate(360deg); } }
