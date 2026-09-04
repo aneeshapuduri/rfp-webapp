@@ -453,6 +453,29 @@ def project_status(request: Request, project_id: str):
     return {"status": project["status"], "has_error": bool(project.get("error_message"))}
 
 
+@app.get("/api/projects/status")
+def bulk_project_status(request: Request, ids: str = ""):
+    """Bulk sibling of /projects/{id}/status, for the list pages (Home, Projects) rather than a
+    single project page. Home and the Projects table poll this once for whichever rows are
+    currently "Analyzing" or "Responses Pending" — the two pipeline stages that change on their
+    own in the background — so a project finishing (or failing) updates those pages without a
+    manual refresh, the same way project_detail.html's own poll already does for a single
+    project. `ids` is a comma-separated list of project ids; unknown, deleted, or inaccessible
+    ids are silently skipped rather than erroring the whole batch, since one stale id (e.g. a
+    project someone else deleted mid-poll) shouldn't break polling for the rest of the list."""
+    user = auth.current_user(request)
+    requested_ids = [i for i in ids.split(",") if i]
+    results = []
+    for pid in requested_ids:
+        project = db.get_project(pid)
+        if not project or project.get("deleted_at"):
+            continue
+        if not db.user_can_access_project(user, project):
+            continue
+        results.append({"id": pid, "status": project["status"], "has_error": bool(project.get("error_message"))})
+    return results
+
+
 @app.post("/projects/{project_id}/responses")
 async def upload_responses(
     request: Request,
