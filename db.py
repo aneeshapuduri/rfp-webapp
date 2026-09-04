@@ -419,26 +419,43 @@ def log_action(action: str, project_id: str | None = None, detail: dict | str | 
     conn.close()
 
 
-def list_audit_log(project_id: str | None = None, limit: int = 500) -> list[dict]:
+def _system_filter_clause(filter_mode: str) -> str:
+    """log_action() attributes every automated pipeline/app event to user_identity='system'
+    (the default when no real user triggered it) and every human action to a real username —
+    so this one comparison is all "system logs" vs "user logs" ever needs to mean."""
+    if filter_mode == "user":
+        return "user_identity != 'system'"
+    if filter_mode == "system":
+        return "user_identity = 'system'"
+    return ""
+
+
+def list_audit_log(project_id: str | None = None, limit: int = 500, filter_mode: str = "all") -> list[dict]:
     conn = get_conn()
+    conditions = []
+    params: list = []
     if project_id:
-        rows = conn.execute(
-            "SELECT * FROM audit_log WHERE project_id = ? ORDER BY timestamp DESC LIMIT ?",
-            (project_id, limit),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?", (limit,)
-        ).fetchall()
+        conditions.append("project_id = ?")
+        params.append(project_id)
+    sys_clause = _system_filter_clause(filter_mode)
+    if sys_clause:
+        conditions.append(sys_clause)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    rows = conn.execute(
+        f"SELECT * FROM audit_log {where} ORDER BY timestamp DESC LIMIT ?", (*params, limit)
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def list_audit_log_for_user(user: dict, project_id: str | None = None, limit: int = 500) -> list[dict]:
+def list_audit_log_for_user(user: dict, project_id: str | None = None, limit: int = 500,
+                             filter_mode: str = "all") -> list[dict]:
     """Same as list_audit_log, but a non-admin only sees entries for projects they can access,
-    plus entries with no project (e.g. their own login activity) that are attributed to them."""
+    plus entries with no project (e.g. their own login activity) that are attributed to them.
+    filter_mode: "all" (default), "user" (real people only, for the Home page feed and the
+    Audit Log's User tab), or "system" (automated pipeline/app events, for the System tab)."""
     if user["role"] == "admin":
-        return list_audit_log(project_id, limit)
+        return list_audit_log(project_id, limit, filter_mode)
     conn = get_conn()
     accessible = list_accessible_project_ids(user["id"])
     created = {
@@ -447,12 +464,15 @@ def list_audit_log_for_user(user: dict, project_id: str | None = None, limit: in
         ).fetchall()
     }
     visible_ids = accessible | created
+    sys_clause = _system_filter_clause(filter_mode)
+    sys_and = f" AND {sys_clause}" if sys_clause else ""
+
     if project_id:
         if project_id not in visible_ids:
             conn.close()
             return []
         rows = conn.execute(
-            "SELECT * FROM audit_log WHERE project_id = ? ORDER BY timestamp DESC LIMIT ?",
+            f"SELECT * FROM audit_log WHERE project_id = ?{sys_and} ORDER BY timestamp DESC LIMIT ?",
             (project_id, limit),
         ).fetchall()
         conn.close()
@@ -461,14 +481,14 @@ def list_audit_log_for_user(user: dict, project_id: str | None = None, limit: in
     if visible_ids:
         placeholders = ", ".join("?" for _ in visible_ids)
         rows = conn.execute(
-            f"SELECT * FROM audit_log WHERE project_id IN ({placeholders}) "
-            "OR (project_id IS NULL AND user_identity = ?) "
+            f"SELECT * FROM audit_log WHERE (project_id IN ({placeholders}) "
+            f"OR (project_id IS NULL AND user_identity = ?)){sys_and} "
             "ORDER BY timestamp DESC LIMIT ?",
             (*visible_ids, user["username"], limit),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM audit_log WHERE project_id IS NULL AND user_identity = ? "
+            f"SELECT * FROM audit_log WHERE project_id IS NULL AND user_identity = ?{sys_and} "
             "ORDER BY timestamp DESC LIMIT ?",
             (user["username"], limit),
         ).fetchall()

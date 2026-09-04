@@ -283,8 +283,8 @@ def home(request: Request):
     submitted = sum(1 for p in projects if p["status"] == "Submitted")
     needs_attention = sum(1 for p in projects if p.get("error_message"))
 
-    recent_projects = projects[:5]
-    recent_activity = db.list_audit_log_for_user(user, limit=8)
+    recent_projects = projects[:6]
+    recent_activity = db.list_audit_log_for_user(user, limit=6, filter_mode="user")
 
     return templates.TemplateResponse(request, "home.html", _ctx(request,
         total_projects=len(projects),
@@ -916,10 +916,11 @@ def delete_project(request: Request, project_id: str, _: None = Depends(auth.ver
 
 
 @app.get("/audit", response_class=HTMLResponse)
-def audit_log(request: Request):
+def audit_log(request: Request, tab: str = "user"):
     user = auth.current_user(request)
-    entries = db.list_audit_log_for_user(user)
-    return templates.TemplateResponse(request, "audit.html", _ctx(request, entries=entries))
+    tab = tab if tab in ("user", "system") else "user"
+    entries = db.list_audit_log_for_user(user, filter_mode=tab)
+    return templates.TemplateResponse(request, "audit.html", _ctx(request, entries=entries, active_tab=tab))
 
 
 # ---------- Admin: user management ----------
