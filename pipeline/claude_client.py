@@ -2,11 +2,12 @@
 Thin wrapper around the Anthropic API used by the agent to draft each proposal section.
 Centralizing the call here means prompts.py and agent.py never touch the SDK directly.
 """
-import json
 import os
 import time
 
 import anthropic
+
+from json_utils import parse_llm_json
 
 MODEL = "claude-sonnet-4-6"
 MAX_RETRIES = 3
@@ -45,12 +46,4 @@ class ClaudeClient:
     def generate_json(self, system: str, user: str, max_tokens: int = 2000) -> list | dict:
         """Return parsed JSON for sections that need structured output (timeline, matrix)."""
         raw = self.generate_text(system, user, max_tokens=max_tokens)
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("```")[1]
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-        try:
-            return json.loads(cleaned.strip())
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Model did not return valid JSON: {e}\nRaw output:\n{raw}")
+        return parse_llm_json(raw, "Claude")

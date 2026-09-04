@@ -3,7 +3,6 @@ Thin wrapper around the Google Gemini API, matching the exact same interface as
 claude_client.ClaudeClient (generate_text / generate_json) so the rest of the pipeline never
 needs to know which provider is actually running underneath it.
 """
-import json
 import os
 import random
 import re
@@ -11,6 +10,8 @@ import time
 
 from google import genai
 from google.genai import types
+
+from json_utils import parse_llm_json
 
 MODEL = "gemini-3.1-flash-lite"
 MAX_RETRIES = 4
@@ -100,11 +101,4 @@ class GeminiClient:
             },
             user,
         )
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        try:
-            return json.loads(raw.strip())
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Gemini did not return valid JSON: {e}\nRaw output:\n{raw}") from e
+        return parse_llm_json(raw, "Gemini")
