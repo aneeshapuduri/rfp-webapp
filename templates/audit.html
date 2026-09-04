@@ -9,14 +9,32 @@
     </div>
 </div>
 
+<div class="tabs" role="tablist">
+    <a href="/audit?tab=user" class="tab {% if active_tab == 'user' %}tab--active{% endif %}" role="tab" aria-selected="{{ 'true' if active_tab == 'user' else 'false' }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        User Logs
+    </a>
+    <a href="/audit?tab=system" class="tab {% if active_tab == 'system' %}tab--active{% endif %}" role="tab" aria-selected="{{ 'true' if active_tab == 'system' else 'false' }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
+        System Logs
+    </a>
+</div>
+
 <div class="card">
     <div class="card__head">
-        <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/></svg> All Activity</h2>
+        <h2>
+        {% if active_tab == 'system' %}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg> System Activity
+        {% else %}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/></svg> User Activity
+        {% endif %}
+        </h2>
         <span class="doc-meta">{{ entries | length }} entr{{ "y" if entries | length == 1 else "ies" }}</span>
     </div>
+    {% if entries %}
     <div class="table-scroll">
     <table class="audit-table">
-        <caption class="visually-hidden">Audit log of all system actions</caption>
+        <caption class="visually-hidden">Audit log of {{ "automated system" if active_tab == "system" else "user" }} actions</caption>
         <thead>
             <tr>
                 <th scope="col">Time (UTC)</th>
@@ -39,5 +57,11 @@
         </tbody>
     </table>
     </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-state__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/></svg></div>
+        <p>No {{ "system" if active_tab == "system" else "user" }} log entries yet.</p>
+    </div>
+    {% endif %}
 </div>
 {% endblock %}
