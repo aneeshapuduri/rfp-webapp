@@ -89,6 +89,18 @@ app = FastAPI(title="RFP Proposal Agent")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+# Cache-busting for /static assets: base.html links style.css with ?v={{ asset_version }}.
+# Without this, every deploy reuses the exact same URL for a changed file, and browsers that
+# cached it on a previous visit have no reason to re-fetch it — a CSS fix can be correctly
+# deployed and still appear to do nothing until someone happens to hard-refresh. Deriving the
+# version from the file's own mtime means it changes automatically on every deploy (a fresh
+# checkout gives the file a new mtime) with nothing to remember to bump by hand.
+try:
+    _ASSET_VERSION = str(int((BASE_DIR / "static" / "style.css").stat().st_mtime))
+except OSError:
+    _ASSET_VERSION = "1"
+templates.env.globals["asset_version"] = _ASSET_VERSION
+
 # Order matters: the LAST middleware added is the OUTERMOST one, i.e. it runs first on the way
 # in. SessionMiddleware must run before AuthGateMiddleware can read request.session, so it's
 # added second (outer); AuthGateMiddleware is added first (inner).
