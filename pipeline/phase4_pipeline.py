@@ -9,6 +9,7 @@ per your stated priority that compliance-matrix accuracy matters most.
 from __future__ import annotations
 
 from claude_client import ClaudeClient
+from extra_sections_prompts import extra_sections_prompt
 from narrative_prompts import (
     closing_prompt,
     compliance_matrix_prompt,
@@ -27,6 +28,7 @@ from narrative_prompts import (
 )
 from phase3_pipeline import load_company_profile
 from schema import Phase1Result, Phase3Result
+from template_mapper import OUR_SECTIONS
 
 # Fallback text used when a project-specific narrative field is missing from a demo/test
 # fixture (older demo_narrative dicts built before these fields existed). Keeps every demo
@@ -47,6 +49,27 @@ _DEMO_FALLBACKS = {
 
 class ComplianceMatrixIncompleteError(Exception):
     pass
+
+
+def _validate_extra_sections(raw) -> list[dict]:
+    """The extra-sections prompt asks for a JSON array of {title, content} objects, but nothing
+    downstream can trust an LLM's JSON shape blindly the way build_compliance_matrix insists on
+    exact requirement-ID coverage — there's no equivalent ground truth to check an extra section
+    against. So this is deliberately lenient rather than a hard gate: drop anything malformed
+    (missing/blank title or content, wrong type) instead of failing the whole proposal over one
+    bad element, since an extra section is additive value, not a correctness-critical one like
+    the compliance matrix."""
+    if not isinstance(raw, list):
+        return []
+    cleaned = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if title and content:
+            cleaned.append({"title": title, "content": content})
+    return cleaned
 
 
 def build_compliance_matrix(
@@ -115,9 +138,15 @@ def run_phase4(
     """
     company = load_company_profile()
     clear_requirements = [r.requirement for r in result.requirements if r.status == "clear"]
+    # Same "finalized" set build_compliance_matrix uses (clear + assumption_needed; ambiguous
+    # items can't still exist by Phase 4) — a requirement asking for an extra attachment could
+    # just as easily have been logged as assumption_needed if its exact format was unclear, so
+    # this needs the fuller set, not just clear_requirements.
+    finalized_requirements = [r.requirement for r in result.requirements if r.status in ("clear", "assumption_needed")]
 
     if demo_narrative is not None:
         sections = dict(demo_narrative)
+        sections.setdefault("extra_sections", [])
     else:
         if client is None:
             raise RuntimeError("No Claude client and no demo_narrative supplied.")
@@ -163,6 +192,9 @@ def run_phase4(
 
         sections["compliance_matrix"] = build_compliance_matrix(result, company, client=client)
 
+        sys_p, user_p = extra_sections_prompt(finalized_requirements, OUR_SECTIONS)
+        sections["extra_sections"] = _validate_extra_sections(client.generate_json(sys_p, user_p, max_tokens=1500))
+
     # Compliance matrix completeness is enforced even in demo mode, using the same code path.
     if "compliance_matrix" in (demo_narrative or {}):
         required_ids = {r.id for r in result.requirements if r.status in ("clear", "assumption_needed")}
@@ -207,5 +239,6 @@ def run_phase4(
         "technical_assumptions": sections.get("technical_assumptions", _DEMO_FALLBACKS["technical_assumptions"]),
         "project_dependencies": sections.get("project_dependencies", _DEMO_FALLBACKS["project_dependencies"]),
         "service_boundaries": sections.get("service_boundaries", _DEMO_FALLBACKS["service_boundaries"]),
+        "extra_sections": sections.get("extra_sections", []),
         "company": company,
     }

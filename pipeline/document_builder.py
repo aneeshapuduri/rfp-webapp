@@ -509,6 +509,27 @@ def _render_closing(sink, content, company):
     sink.body(content["closing"])
 
 
+def _render_extra_sections(doc: Document, content: dict):
+    """Appends any RFP-requested sections that aren't part of our fixed 31 (see
+    extra_sections_prompts.py / phase4_pipeline.py._validate_extra_sections) — a Certificate of
+    Insurance, key-staff resumes, a Disaster Recovery Plan, and similar explicit "include this
+    exhibit" asks. Always appended at the very end (after the 31 canonical sections, and after
+    the "Needs Manual Placement" block on the custom-template path) under one clearly-labeled
+    group heading, rather than interleaved with the numbered sections, since these are
+    dynamically detected per-RFP rather than part of the standard template. A doc.add_heading
+    call always appends at the current end regardless of which sink the 31 sections used, so
+    this needs no anchor/cursor of its own — unlike the section renderers above it takes the
+    Document directly, not a sink."""
+    extra_sections = content.get("extra_sections") or []
+    if not extra_sections:
+        return
+    doc.add_heading("Additional Sections Requested by the RFP", level=1)
+    sink = _AppendSink(doc)
+    for item in extra_sections:
+        doc.add_heading(item["title"], level=2)
+        sink.body(item["content"])
+
+
 # One renderer per canonical section in template_mapper.OUR_SECTIONS. A renderer is called as
 # renderer(sink, content, company) and writes that section's body content through the sink —
 # it never adds the section's own heading (the caller does, since a matched-in-template section
@@ -599,6 +620,8 @@ def _build_final_proposal_with_template(output_path: str, content: dict, templat
             doc.add_heading(our_section, level=2)
             _append_section_content(doc, our_section, content, company)
 
+    _render_extra_sections(doc, content)
+
     doc.save(output_path)
     return output_path
 
@@ -627,6 +650,8 @@ def build_final_proposal(output_path: str, content: dict, template_path: str | N
         renderer = SECTION_RENDERERS.get(section)
         if renderer is not None:
             renderer(sink, content, company)
+
+    _render_extra_sections(doc, content)
 
     contact = company.get("contact", {})
     if contact:
