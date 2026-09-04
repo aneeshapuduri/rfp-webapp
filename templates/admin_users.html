@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import search_box %}
 {% block title %}Users — RFP Proposal Agent{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -23,6 +24,11 @@
         </h2>
         <span class="doc-meta">{{ users | length }} account{{ "s" if users | length != 1 else "" }}</span>
     </div>
+    {% if users %}
+    <div style="padding:16px 22px 0;">
+        {{ search_box("user-search", "table.user-table tbody tr", "Search users by name or role…", empty_id="user-search-empty") }}
+    </div>
+    {% endif %}
     <div class="table-scroll">
     <table class="user-table">
         <caption class="visually-hidden">Existing user accounts</caption>
@@ -122,6 +128,7 @@
         </tbody>
     </table>
     </div>
+    <p id="user-search-empty" class="search-empty-note" hidden>No accounts match your search.</p>
 </div>
 
 <div class="card">

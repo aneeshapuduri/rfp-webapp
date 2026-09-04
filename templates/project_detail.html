@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_icon %}
+{% from "_macros.html" import status_icon, search_box %}
 {% block title %}{{ project.name }} — RFP Proposal Agent{% endblock %}
 {% block content %}
 <a href="/" class="back-link">&larr; Back to all projects</a>
@@ -103,23 +103,41 @@
         </span>
         <div style="flex:1;">
             <div class="status-panel__title">Review the assumptions before continuing</div>
-            <div class="status-panel__text">To fill gaps the RFP didn't specify, the following assumptions were made. Accept them to continue to the proposal preview, or cancel this bid if they aren't acceptable.</div>
+            <div class="status-panel__text">To fill gaps the RFP didn't specify, the following assumptions were made. Edit any of them if they don't match your intent, then accept to continue to the proposal preview — the edited wording is what carries through to the generated document. Cancel this bid if the assumptions aren't acceptable at all.</div>
             {% if assumption_items %}
-            <ul class="fit-list" style="margin-top:12px;">
-                {% for r in assumption_items %}
-                <li class="fit-row">
-                    <span class="fit-row__icon" aria-hidden="true">~</span>
-                    <div>
-                        <span class="fit-row__area">{{ r.requirement }}</span><br>
-                        <em>Assumed:</em> {{ r.assumption_text }}
-                    </div>
-                </li>
-                {% endfor %}
-            </ul>
-            {% endif %}
+            <form action="/projects/{{ project.id }}/assumptions/accept" method="post" id="assumptions-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="assumption_row_count" value="{{ assumption_items|length }}">
+                <ul class="fit-list" style="margin-top:12px;">
+                    {% for r in assumption_items %}
+                    <li class="fit-row">
+                        <span class="fit-row__icon" aria-hidden="true">~</span>
+                        <div style="flex:1;">
+                            <span class="fit-row__area">{{ r.requirement }}</span>
+                            <input type="hidden" name="assumption_id_{{ loop.index0 }}" value="{{ r.id }}">
+                            <label class="visually-hidden" for="assumption_text_{{ loop.index0 }}">Assumption for: {{ r.requirement }}</label>
+                            <textarea id="assumption_text_{{ loop.index0 }}" name="assumption_text_{{ loop.index0 }}"
+                                      rows="2" style="width:100%; margin-top:6px;">{{ r.assumption_text }}</textarea>
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ul>
+                <div class="decision-actions">
+                    <button type="submit" class="btn-primary btn-approve"
+                            onclick="return confirm('Accept these assumptions (including any edits) and continue to the proposal preview?');">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                        Accept &amp; Continue
+                    </button>
+                    <button type="submit" formaction="/projects/{{ project.id }}/assumptions/cancel" class="btn-danger"
+                            onclick="return confirm(&quot;Cancel this bid? The assumptions won't be accepted and no proposal will be generated.&quot;);">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+            {% else %}
             <div class="decision-actions">
                 <form action="/projects/{{ project.id }}/assumptions/accept" method="post" class="inline-form"
-                      onsubmit="return confirm('Accept these assumptions and continue to the proposal preview?');">
+                      onsubmit="return confirm('Continue to the proposal preview?');">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="btn-primary btn-approve">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
@@ -127,11 +145,12 @@
                     </button>
                 </form>
                 <form action="/projects/{{ project.id }}/assumptions/cancel" method="post" class="inline-form"
-                      onsubmit="return confirm(&quot;Cancel this bid? The assumptions won't be accepted and no proposal will be generated.&quot;);">
+                      onsubmit="return confirm(&quot;Cancel this bid? No proposal will be generated.&quot;);">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="btn-danger">Cancel</button>
                 </form>
             </div>
+            {% endif %}
         </div>
 
         {% elif project.status == "Awaiting Preview" and generating %}
@@ -484,6 +503,22 @@
                 </tbody>
             </table>
 
+            {% if preview_content.extra_sections %}
+            <h3>Additional Sections Requested by the RFP</h3>
+            <p class="coverage-note" style="margin-top:0;">The uploaded bid asked for the following, which don't fit any of our standard 31 sections — each is added as its own section at the end of the generated document. Edit the drafted text below, or uncheck one to leave it out entirely.</p>
+            <input type="hidden" name="extra_section_row_count" value="{{ preview_content.extra_sections | length }}">
+            {% for s in preview_content.extra_sections %}
+            <div class="form-field">
+                <label style="display:flex; align-items:center; gap:8px;">
+                    <input type="checkbox" name="extra_section_include_{{ loop.index0 }}" value="1" checked style="width:auto;">
+                    <span>Include this section</span>
+                </label>
+                <input type="text" name="extra_section_title_{{ loop.index0 }}" value="{{ s.title }}" style="width:100%; font-weight:600; margin-top:4px;">
+                <textarea name="extra_section_content_{{ loop.index0 }}" rows="3" style="width:100%; margin-top:6px;">{{ s.content }}</textarea>
+            </div>
+            {% endfor %}
+            {% endif %}
+
             <h3>Template</h3>
             <div class="form-field">
                 <label><input type="radio" name="template_choice" value="default" checked onclick="document.getElementById('custom-template-field').hidden = true;"> Use the default template</label><br>
@@ -515,7 +550,10 @@
 {% if requirements %}
 <div class="card" aria-labelledby="requirements-heading">
     <div class="card__head"><h2 id="requirements-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> Extracted Requirements</h2></div>
-    <table class="requirements-table">
+    <div style="padding:16px 22px 0;">
+        {{ search_box("requirements-search", "table.requirements-table.req-list tbody tr", "Search requirements…", empty_id="requirements-search-empty") }}
+    </div>
+    <table class="requirements-table req-list">
         <caption class="visually-hidden">Extracted requirements with status</caption>
         <thead>
             <tr>
@@ -546,6 +584,7 @@
             {% endfor %}
         </tbody>
     </table>
+    <p id="requirements-search-empty" class="search-empty-note" hidden>No requirements match your search.</p>
 </div>
 {% endif %}
 
@@ -574,7 +613,10 @@
 {% if compliance_matrix %}
 <div class="card" aria-labelledby="compliance-heading">
     <div class="card__head"><h2 id="compliance-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="9" x2="9" y2="21"/></svg> Compliance Matrix</h2></div>
-    <table class="compliance-table">
+    <div style="padding:16px 22px 0;">
+        {{ search_box("compliance-search", "table.compliance-table.compliance-list tbody tr", "Search the compliance matrix…", empty_id="compliance-search-empty") }}
+    </div>
+    <table class="compliance-table compliance-list">
         <caption class="visually-hidden">Compliance matrix covering every extracted requirement</caption>
         <thead>
             <tr>
@@ -593,6 +635,7 @@
             {% endfor %}
         </tbody>
     </table>
+    <p id="compliance-search-empty" class="search-empty-note" hidden>No compliance rows match your search.</p>
     <div class="card__body" style="padding-top:12px;">
         <p class="coverage-note" style="margin:0;">{{ compliance_matrix | length }} of {{ compliance_matrix | length }} requirements covered.</p>
     </div>

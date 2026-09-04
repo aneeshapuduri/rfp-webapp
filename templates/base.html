@@ -8,6 +8,25 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+<script>
+// Shared client-side filter for every searchable list/table on the site (see the search_box
+// macro in _macros.html) — rows are hidden with the `hidden` attribute rather than removed, so
+// nothing about the row (its data attributes, its form fields if it's an editable row) is lost;
+// a poll script or a form submit both still see/use a hidden row exactly as if it were visible.
+function __filterRows(inputEl, rowSelector, emptyId) {
+    var q = inputEl.value.trim().toLowerCase();
+    var visibleCount = 0;
+    document.querySelectorAll(rowSelector).forEach(function (row) {
+        var match = q.length === 0 || row.textContent.toLowerCase().indexOf(q) !== -1;
+        row.hidden = !match;
+        if (match) visibleCount++;
+    });
+    if (emptyId) {
+        var empty = document.getElementById(emptyId);
+        if (empty) empty.hidden = !(q.length > 0 && visibleCount === 0);
+    }
+}
+</script>
 </head>
 <body{% if not current_user %} class="is-auth"{% endif %}>
 <a class="skip-link" href="#main-content">Skip to main content</a>

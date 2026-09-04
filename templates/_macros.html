@@ -67,3 +67,16 @@
 })();
 </script>
 {% endmacro %}
+
+{# Search box for filtering a listing's rows client-side (see __filterRows in base.html). No
+   round-trip, no pagination to fight with — every listing this app has is already rendered in
+   full, so filtering in place is enough. `row_selector` should match the rows to filter (e.g.
+   "table.project-table tbody tr"); pass `empty_id` (the id of a hidden note element placed
+   right after the table/list) to have it show automatically when a search matches nothing. #}
+{% macro search_box(input_id, row_selector, placeholder="Search…", empty_id=None) %}
+<div class="search-box">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" id="{{ input_id }}" placeholder="{{ placeholder }}" aria-label="{{ placeholder }}"
+           oninput='__filterRows(this, {{ row_selector | tojson }}{% if empty_id %}, {{ empty_id | tojson }}{% endif %})'>
+</div>
+{% endmacro %}

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_icon, status_poll_script %}
+{% from "_macros.html" import status_icon, status_poll_script, search_box %}
 {% block title %}Projects — RFP Proposal Agent{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -15,6 +15,7 @@
 
 <div class="card">
 {% if projects %}
+    {{ search_box("project-search", "table.project-table tbody tr[data-project-id]", "Search projects by name or status…", empty_id="project-search-empty") }}
     <div class="table-scroll">
     <table class="project-table table-fit" role="table">
         <caption class="visually-hidden">List of RFP proposal projects with status and dates</caption>
@@ -64,6 +65,7 @@
         </tbody>
     </table>
     </div>
+    <p id="project-search-empty" class="search-empty-note" hidden>No projects match your search.</p>
 {% else %}
     <div class="empty-state">
         <div class="empty-state__icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg></div>

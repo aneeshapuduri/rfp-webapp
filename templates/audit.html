@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import search_box %}
 {% block title %}Audit Log — RFP Proposal Agent{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -32,6 +33,9 @@
         <span class="doc-meta">{{ entries | length }} entr{{ "y" if entries | length == 1 else "ies" }}</span>
     </div>
     {% if entries %}
+    <div style="padding:16px 22px 0;">
+        {{ search_box("audit-search", "table.audit-table tbody tr", "Search the log by user, action, project, or detail…", empty_id="audit-search-empty") }}
+    </div>
     <div class="table-scroll">
     <table class="audit-table table-fit">
         <caption class="visually-hidden">Audit log of {{ "automated system" if active_tab == "system" else "user" }} actions</caption>
@@ -60,6 +64,7 @@
         </tbody>
     </table>
     </div>
+    <p id="audit-search-empty" class="search-empty-note" hidden>No log entries match your search.</p>
     {% else %}
     <div class="empty-state">
         <div class="empty-state__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/></svg></div>
