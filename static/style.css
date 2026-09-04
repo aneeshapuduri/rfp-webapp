@@ -258,6 +258,12 @@ h2 { color: var(--navy); font-size: 1.05rem; }
    with no fixed height never clips a cell that's allowed to wrap (like the status pill). */
 .table-fit td { overflow: hidden; text-overflow: ellipsis; }
 .table-fit .cell-truncate a, .table-fit .cell-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+/* For cells whose content isn't meant to be shortened (audit log JSON detail blobs, long
+   filenames, UUIDs) — normal word-wrap only breaks at spaces/hyphens, so one long token with
+   underscores or no separators (a filename, an unbroken id) just overflows its column instead
+   of wrapping. .cell-wrap forces a break anywhere so it wraps to multiple lines within the
+   column's fixed width instead of bleeding past the card edge. */
+.table-fit .cell-wrap { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .status-pill.status-pill--wrap { white-space: normal; line-height: 1.35; max-width: 100%; box-sizing: border-box; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 13px 22px; vertical-align: top; }
