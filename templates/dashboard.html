@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_icon %}
+{% from "_macros.html" import status_icon, status_poll_script %}
 {% block title %}Projects — RFP Proposal Agent{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -34,7 +34,7 @@
         </thead>
         <tbody>
             {% for p in projects %}
-            <tr class="clickable-row">
+            <tr class="clickable-row" data-project-id="{{ p.id }}" data-status="{{ p.status }}">
                 <td class="cell-truncate"><a href="/projects/{{ p.id }}" title="{{ p.name }}">{{ p.name }}</a></td>
                 <td>
                     <span class="status-pill status-pill--wrap status-{{ p.status | replace(' ', '-') | lower }}">
@@ -71,4 +71,5 @@
     </div>
 {% endif %}
 </div>
+{{ status_poll_script("table.project-table tbody tr[data-project-id]") }}
 {% endblock %}

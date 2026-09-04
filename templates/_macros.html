@@ -24,3 +24,46 @@
 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
 {%- endif -%}
 {% endmacro %}
+
+{# Shared auto-refresh poller for list pages (Home, Projects) — the single-project page
+   (project_detail.html) has its own inline version of this same idea since it only ever
+   tracks one id. Call with the CSS selector for the `<tr data-project-id="..." data-status="...">`
+   rows a page renders (dashboard.html and home.html's Recent Projects table both set these
+   attributes already). Only "Analyzing" and "Responses Pending" are pipeline stages that
+   change on their own in the background without the user doing anything on this page, so
+   polling only starts when at least one visible row is in one of those two states — a page
+   with zero active rows renders no script at all. When a poll notices a tracked row's status
+   changed (or it picked up an error while still "in progress"), it reloads the page once,
+   the same recovery the single-project poller uses. #}
+{% macro status_poll_script(row_selector) %}
+<script>
+(function () {
+    var ACTIVE_STATUSES = ["Analyzing", "Responses Pending"];
+    var rows = document.querySelectorAll({{ row_selector | tojson }});
+    var tracked = {};
+    rows.forEach(function (row) {
+        var status = row.getAttribute("data-status");
+        var id = row.getAttribute("data-project-id");
+        if (id && ACTIVE_STATUSES.indexOf(status) !== -1) {
+            tracked[id] = status;
+        }
+    });
+    var ids = Object.keys(tracked);
+    if (ids.length === 0) return;
+    var pollUrl = "/api/projects/status?ids=" + encodeURIComponent(ids.join(","));
+    var timer = setInterval(function () {
+        fetch(pollUrl, { credentials: "same-origin" })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) {
+                if (!data) return;
+                var changed = data.some(function (p) { return p.status !== tracked[p.id] || p.has_error; });
+                if (changed) {
+                    clearInterval(timer);
+                    location.reload();
+                }
+            })
+            .catch(function () { /* network hiccup — the next tick tries again */ });
+    }, 5000);
+})();
+</script>
+{% endmacro %}

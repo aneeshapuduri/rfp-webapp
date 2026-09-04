@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_icon %}
+{% from "_macros.html" import status_icon, status_poll_script %}
 {% block title %}Home — RFP Proposal Agent{% endblock %}
 {% block content %}
 <div class="home-hero">
@@ -65,7 +65,7 @@
             </colgroup>
             <tbody>
                 {% for p in recent_projects %}
-                <tr class="clickable-row">
+                <tr class="clickable-row" data-project-id="{{ p.id }}" data-status="{{ p.status }}">
                     <td class="cell-truncate"><a href="/projects/{{ p.id }}" title="{{ p.name }}">{{ p.name }}</a></td>
                     <td>
                         <span class="status-pill status-pill--wrap status-{{ p.status | replace(' ', '-') | lower }}">
@@ -149,4 +149,5 @@
         <p class="pipeline-caption"><em>If a requirement is ambiguous, the pipeline pauses at Clarify and generates client-ready questions — it only continues to Design once answers come back or the analyst resolves it.</em></p>
     </div>
 </div>
+{{ status_poll_script("table.table-fit tbody tr[data-project-id]") }}
 {% endblock %}
