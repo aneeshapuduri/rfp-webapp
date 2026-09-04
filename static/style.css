@@ -87,11 +87,8 @@ code { background: var(--neutral-bg); padding: 2px 6px; border-radius: 3px; font
 }
 .sidebar__brand { display: flex; align-items: center; gap: 10px; padding: 6px 8px 28px; }
 .sidebar__mark {
-  width: 34px; height: 34px; border-radius: 9px;
-  background: linear-gradient(145deg,#4A7DE0,#3157B0);
-  display: flex; align-items: center; justify-content: center;
-  color: #fff; font-weight: 800; font-size: 14px; flex-shrink: 0;
-  box-shadow: 0 3px 10px -2px rgba(59,111,209,.6);
+  width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0; display: block;
+  box-shadow: 0 3px 10px -2px rgba(29,27,75,.5);
 }
 .sidebar__name { color: #fff; font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
 .sidebar__section-label {
@@ -183,11 +180,8 @@ body.is-auth { height: 100vh; height: 100dvh; overflow: hidden; margin: 0; }
 .auth-visual__inner { position: relative; z-index: 1; max-width: 380px; }
 .auth-visual__brand { display: flex; align-items: center; gap: 10px; margin-bottom: clamp(16px, 3vh, 32px); }
 .auth-visual__mark {
-  width: 34px; height: 34px; border-radius: 9px;
-  background: linear-gradient(145deg,#4A7DE0,#3157B0);
-  display: flex; align-items: center; justify-content: center;
-  color: #fff; font-weight: 800; font-size: 14px; flex-shrink: 0;
-  box-shadow: 0 3px 10px -2px rgba(59,111,209,.6);
+  width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0; display: block;
+  box-shadow: 0 3px 10px -2px rgba(29,27,75,.5);
 }
 .auth-visual__name { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
 .auth-visual__art { margin-bottom: clamp(12px, 3vh, 22px); width: clamp(90px, 12vh, 150px); height: auto; }
