@@ -59,18 +59,21 @@
         </div>
         {% if recent_projects %}
         <div class="table-scroll">
-        <table>
+        <table class="table-fit">
+            <colgroup>
+                <col style="width:38%;"><col style="width:42%;"><col style="width:20%;">
+            </colgroup>
             <tbody>
                 {% for p in recent_projects %}
                 <tr class="clickable-row">
-                    <td><a href="/projects/{{ p.id }}">{{ p.name }}</a></td>
+                    <td class="cell-truncate"><a href="/projects/{{ p.id }}" title="{{ p.name }}">{{ p.name }}</a></td>
                     <td>
-                        <span class="status-pill status-{{ p.status | replace(' ', '-') | lower }}">
+                        <span class="status-pill status-pill--wrap status-{{ p.status | replace(' ', '-') | lower }}">
                             {{ status_icon(p.status, p.error_message) }}
                             {{ p.status_label }}
                         </span>
                     </td>
-                    <td class="cell-muted" style="white-space:nowrap;">{{ p.updated_at[:10] }}</td>
+                    <td class="cell-muted" style="white-space:nowrap; text-align:right;" title="{{ p.updated_at[:10] }}">{{ p.updated_at[:10] }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

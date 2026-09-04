@@ -16,8 +16,12 @@
 <div class="card">
 {% if projects %}
     <div class="table-scroll">
-    <table class="project-table" role="table">
+    <table class="project-table table-fit" role="table">
         <caption class="visually-hidden">List of RFP proposal projects with status and dates</caption>
+        <colgroup>
+            <col style="width:22%;"><col style="width:27%;"><col style="width:12%;"><col style="width:13%;"><col style="width:13%;">
+            {% if current_user.role == "admin" %}<col style="width:13%;">{% endif %}
+        </colgroup>
         <thead>
             <tr>
                 <th scope="col">Project</th>
@@ -31,9 +35,9 @@
         <tbody>
             {% for p in projects %}
             <tr class="clickable-row">
-                <td><a href="/projects/{{ p.id }}">{{ p.name }}</a></td>
+                <td class="cell-truncate"><a href="/projects/{{ p.id }}" title="{{ p.name }}">{{ p.name }}</a></td>
                 <td>
-                    <span class="status-pill status-{{ p.status | replace(' ', '-') | lower }}">
+                    <span class="status-pill status-pill--wrap status-{{ p.status | replace(' ', '-') | lower }}">
                         {{ status_icon(p.status, p.error_message) }}
                         {{ p.status_label }}
                     </span>
@@ -41,9 +45,9 @@
                     <span class="error-flag" title="{{ p.error_message }}">⚠ Error — see detail page</span>
                     {% endif %}
                 </td>
-                <td class="cell-value">{% if p.total_price %}${{ "{:,.0f}".format(p.total_price) }}{% else %}<span class="cell-muted">—</span>{% endif %}</td>
-                <td class="cell-muted">{{ p.created_at[:10] }}</td>
-                <td class="cell-muted">{{ p.updated_at[:10] }}</td>
+                <td class="cell-value" style="white-space:nowrap;" title="{% if p.total_price %}${{ "{:,.2f}".format(p.total_price) }}{% endif %}">{% if p.total_price %}${{ "{:,.0f}".format(p.total_price) }}{% else %}<span class="cell-muted">—</span>{% endif %}</td>
+                <td class="cell-muted" style="white-space:nowrap;" title="{{ p.created_at[:10] }}">{{ p.created_at[:10] }}</td>
+                <td class="cell-muted" style="white-space:nowrap;" title="{{ p.updated_at[:10] }}">{{ p.updated_at[:10] }}</td>
                 {% if current_user.role == "admin" %}
                 <td style="text-align:right;">
                     <form action="/projects/{{ p.id }}/delete" method="post" class="inline-form"
