@@ -14,6 +14,13 @@
 <div class="alert alert-error" role="alert">{{ error }}</div>
 {% endif %}
 
+{% if not categories %}
+<div class="alert alert-error" role="alert">
+    No categories are configured yet. Ask an admin to add at least one under
+    <a href="/admin/categories">Admin &middot; Categories</a> before a project can be created.
+</div>
+{% endif %}
+
 <div class="card">
     <div class="card__body">
         <form action="/projects" method="post" enctype="multipart/form-data" class="upload-form">
@@ -22,7 +29,17 @@
                 <label for="project_name">Project name</label>
                 <input type="text" id="project_name" name="project_name" required
                        value="{{ project_name or '' }}"
-                       placeholder="e.g. City of Lakeview — Service Portal Modernization">
+                       placeholder="e.g. City of Lakeview — Service Portal Modernization"
+                       {% if not categories %}disabled{% endif %}>
+            </div>
+            <div class="form-field">
+                <label for="category">Category</label>
+                <select id="category" name="category" required {% if not categories %}disabled{% endif %}>
+                    <option value="" {% if not category %}selected{% endif %} disabled>Choose a category&hellip;</option>
+                    {% for c in categories %}
+                    <option value="{{ c.name }}" {% if c.name == category %}selected{% endif %}>{{ c.name }}</option>
+                    {% endfor %}
+                </select>
             </div>
             <div class="form-field">
                 <label for="bid_file">Bid invitation file</label>
@@ -30,11 +47,11 @@
                     <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                     <div class="dropzone__label">Click to choose a file, or drag one here</div>
                     <div class="dropzone__sub">PDF, Word (.docx), or plain text — up to 25 MB</div>
-                    <input type="file" id="bid_file" name="bid_file" accept=".pdf,.docx,.txt" required>
+                    <input type="file" id="bid_file" name="bid_file" accept=".pdf,.docx,.txt" required {% if not categories %}disabled{% endif %}>
                 </div>
                 <div class="dropzone__filename" id="dropzone-filename"></div>
             </div>
-            <button type="submit" class="btn-primary">Start Review</button>
+            <button type="submit" class="btn-primary" {% if not categories %}disabled{% endif %}>Start Review</button>
         </form>
     </div>
 </div>

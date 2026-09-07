@@ -20,12 +20,13 @@
     <table class="project-table table-fit" role="table">
         <caption class="visually-hidden">List of RFP proposal projects with status and dates</caption>
         <colgroup>
-            <col style="width:22%;"><col style="width:27%;"><col style="width:12%;"><col style="width:13%;"><col style="width:13%;">
-            {% if current_user.role == "admin" %}<col style="width:13%;">{% endif %}
+            <col style="width:19%;"><col style="width:13%;"><col style="width:23%;"><col style="width:11%;"><col style="width:11%;"><col style="width:11%;">
+            {% if current_user.role == "admin" %}<col style="width:12%;">{% endif %}
         </colgroup>
         <thead>
             <tr>
                 <th scope="col">Project</th>
+                <th scope="col">Category</th>
                 <th scope="col">Status</th>
                 <th scope="col">Est. Value</th>
                 <th scope="col">Created</th>
@@ -37,6 +38,7 @@
             {% for p in projects %}
             <tr class="clickable-row" data-project-id="{{ p.id }}" data-status="{{ p.status }}">
                 <td class="cell-truncate"><a href="/projects/{{ p.id }}" title="{{ p.name }}">{{ p.name }}</a></td>
+                <td>{% if p.category %}<span class="cap-chip">{{ p.category }}</span>{% else %}<span class="cell-muted">—</span>{% endif %}</td>
                 <td>
                     <span class="status-pill status-pill--wrap status-{{ p.status | replace(' ', '-') | lower }}">
                         {{ status_icon(p.status, p.error_message) }}

@@ -7,6 +7,7 @@
 <div class="page-head">
     <div>
         <h1>{{ project.name }}</h1>
+        {% if project.category %}<span class="cap-chip">{{ project.category }}</span>{% endif %}
     </div>
     <span class="status-pill status-{{ project.status | replace(' ', '-') | lower }}">
         {{ status_icon(project.status, project.error_message) }}
