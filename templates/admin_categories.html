@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% from "_macros.html" import search_box %}
+{% block title %}Categories — RFP Proposal Agent{% endblock %}
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>Categories</h1>
+        <p>These are the options every user chooses from when creating a new project. Add the
+           categories your team organizes bids by (by department, client type, service line, or
+           however makes sense) — members can't type their own, only pick from this list.</p>
+    </div>
+</div>
+
+{% if error %}
+<div class="alert alert-error" role="alert">{{ error }}</div>
+{% endif %}
+
+<div class="card">
+    <div class="card__head">
+        <h2>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2.59 12.58A2 2 0 0 1 2 11.17V4a2 2 0 0 1 2-2h7.17a2 2 0 0 1 1.41.59l8 8a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+            Categories
+        </h2>
+        <span class="doc-meta">{{ categories | length }} categor{{ "y" if categories | length == 1 else "ies" }}</span>
+    </div>
+    {% if categories %}
+    <div style="padding:16px 22px 0;">
+        {{ search_box("category-search", "table.category-table tbody tr", "Search categories…", empty_id="category-search-empty") }}
+    </div>
+    <div class="table-scroll">
+    <table class="category-table">
+        <caption class="visually-hidden">Configured project categories</caption>
+        <thead>
+            <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Added</th>
+                <th scope="col" style="text-align:right;">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for c in categories %}
+            <tr>
+                <td style="font-weight:600;">{{ c.name }}</td>
+                <td class="cell-muted">{{ c.created_at[:10] }}</td>
+                <td style="text-align:right;">
+                    <form action="/admin/categories/{{ c.id }}/delete" method="post" class="inline-form"
+                          onsubmit="return confirm('Remove the category &quot;{{ c.name }}&quot;? Projects already using it keep showing it — this only removes it from the dropdown for new projects.');">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="icon-btn icon-btn-danger" title="Delete category" aria-label="Delete {{ c.name }}">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                        </button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <p id="category-search-empty" class="search-empty-note" hidden>No categories match your search.</p>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-state__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2.59 12.58A2 2 0 0 1 2 11.17V4a2 2 0 0 1 2-2h7.17a2 2 0 0 1 1.41.59l8 8a2 2 0 0 1 0 2.82z"/></svg></div>
+        <p>No categories yet — add one below. Until then, nobody can create a new project.</p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <div class="card__head">
+        <h2>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add a category
+        </h2>
+    </div>
+    <div class="card__body">
+        <form action="/admin/categories" method="post" class="upload-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="form-field">
+                <label for="name">Category name</label>
+                <input type="text" id="name" name="name" required placeholder="e.g. State &amp; Local Government">
+            </div>
+            <button type="submit" class="btn-primary">Add category</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
