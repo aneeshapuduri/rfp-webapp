@@ -29,27 +29,138 @@
 {% endif %}
 
 <div class="kpi-grid">
-    <div class="kpi kpi--navy">
+    <a class="kpi kpi--navy" href="/" title="View all projects">
         <div class="kpi__icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
         <div class="kpi__value">{{ total_projects }}</div>
         <div class="kpi__label">Total Projects</div>
-    </div>
-    <div class="kpi kpi--warning">
+    </a>
+    <a class="kpi kpi--warning" href="/?status=__awaiting_client__&amp;label=Awaiting+Client" title="View projects awaiting client clarification">
         <div class="kpi__icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
         <div class="kpi__value">{{ awaiting_client }}</div>
         <div class="kpi__label">Awaiting Client</div>
-    </div>
-    <div class="kpi kpi--accent">
+    </a>
+    <a class="kpi kpi--accent" href="/?status=__in_review__&amp;label=In+Review" title="View projects in review">
         <div class="kpi__icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20"/></svg></div>
         <div class="kpi__value">{{ in_review }}</div>
         <div class="kpi__label">In Review</div>
-    </div>
-    <div class="kpi kpi--success">
+    </a>
+    <a class="kpi kpi--success" href="/?status=Submitted" title="View submitted projects">
         <div class="kpi__icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
         <div class="kpi__value">{{ submitted }}</div>
         <div class="kpi__label">Submitted</div>
+    </a>
+</div>
+
+{% if category_stage_chart %}
+<div class="card cat-stage-card">
+    <div class="card__head">
+        <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12.5" y="8" width="3" height="10"/><rect x="18" y="5" width="3" height="13"/></svg> Statistics by Category — by Stage</h2>
+        <div style="display:flex; align-items:center; gap:14px;">
+            <p class="cat-stage-note">Top {{ category_stage_chart.categories | length }} of {{ category_stage_chart.total_categories }} categories · each bar split by pipeline stage</p>
+            <button type="button" class="cat-stage-toggle" id="catStageToggle">View as table</button>
+        </div>
+    </div>
+    <div class="card__body">
+
+        <div class="cat-stage-legend">
+            {% for s in category_stage_chart.top_statuses %}
+            <span class="cat-stage-legend__item"><span class="cat-stage-swatch stage-seg-{{ s.slug }}"></span>{{ s.label }}</span>
+            {% endfor %}
+            {% if category_stage_chart.other_statuses_count > 0 %}
+            <span class="cat-stage-legend__item"><span class="cat-stage-swatch stage-seg-other"></span>Other stages</span>
+            {% endif %}
+        </div>
+
+        <div id="catStageChart" class="cat-stage-chart">
+            {% for c in category_stage_chart.categories %}
+            <div class="cat-stage-row">
+                <a class="cat-stage-row__label" href="/?category={{ c.filter_value | urlencode }}&amp;label={{ c.name | urlencode }}" title="View all {{ c.name }} projects">{{ c.name }}</a>
+                <div class="cat-stage-row__track">
+                    <div class="cat-stage-bar" style="width:{{ c.width_pct }}%;">
+                        {% for seg in c.segments %}
+                        <a class="seg stage-seg-{{ seg.slug }}" style="width:{{ seg.width_pct }}%;"
+                           href="/?status={{ seg.status | urlencode }}&amp;category={{ c.filter_value | urlencode }}&amp;label={{ (c.name ~ ' — ' ~ seg.label) | urlencode }}"
+                           data-tip="{{ c.name }} — {{ seg.label }}: {{ seg.count }}"></a>
+                        {% endfor %}
+                        {% if c.other_count > 0 %}
+                        <a class="seg stage-seg-other" style="width:{{ c.other_width_pct }}%;"
+                           href="/?category={{ c.filter_value | urlencode }}&amp;label={{ c.name | urlencode }}"
+                           data-tip="{{ c.name }} — Other stages: {{ c.other_count }}"></a>
+                        {% endif %}
+                    </div>
+                    <span class="cat-stage-row__total">{{ c.total }}</span>
+                </div>
+            </div>
+            {% endfor %}
+
+            <div class="cat-stage-axis">
+                <div></div>
+                <div class="cat-stage-axis__ticks">
+                    {% set tick_count = category_stage_chart.axis_ticks | length %}
+                    {% for t in category_stage_chart.axis_ticks %}
+                    <span style="left:{{ (loop.index0 / (tick_count - 1)) * 100 }}%;">{{ t }}</span>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <div id="catStageTable" class="cat-stage-table-wrap" hidden>
+            <table class="cat-stage-table">
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        {% for s in category_stage_chart.top_statuses %}<th>{{ s.label }}</th>{% endfor %}
+                        {% if category_stage_chart.other_statuses_count > 0 %}<th>Other</th>{% endif %}
+                        <th>Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in category_stage_chart.categories %}
+                    <tr>
+                        <td><a href="/?category={{ c.filter_value | urlencode }}&amp;label={{ c.name | urlencode }}">{{ c.name }}</a></td>
+                        {% set seg_by_status = {} %}
+                        {% for seg in c.segments %}{% set _ = seg_by_status.update({seg.status: seg.count}) %}{% endfor %}
+                        {% for s in category_stage_chart.top_statuses %}<td>{{ seg_by_status.get(s.status, 0) }}</td>{% endfor %}
+                        {% if category_stage_chart.other_statuses_count > 0 %}<td>{{ c.other_count }}</td>{% endif %}
+                        <td>{{ c.total }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <p class="cat-stage-footnote">
+            {% if category_stage_chart.other_categories_count > 0 %}{{ category_stage_chart.other_categories_count }} more categor{{ "y" if category_stage_chart.other_categories_count == 1 else "ies" }} not shown.{% endif %}
+            {% if category_stage_chart.other_statuses_count > 0 %} {{ category_stage_chart.other_statuses_count }} less common stage{{ "" if category_stage_chart.other_statuses_count == 1 else "s" }} grouped under "Other stages".{% endif %}
+            Bars share one scale (0–{{ category_stage_chart.axis_max }} projects) so lengths compare directly across categories.
+        </p>
     </div>
 </div>
+<div id="catStageTooltip" class="cat-stage-tooltip" hidden></div>
+<script>
+(function () {
+    var tip = document.getElementById('catStageTooltip');
+    if (tip) {
+        document.querySelectorAll('#catStageChart .seg[data-tip]').forEach(function (seg) {
+            seg.addEventListener('mouseenter', function () { tip.textContent = seg.getAttribute('data-tip'); tip.hidden = false; });
+            seg.addEventListener('mousemove', function (e) { tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY + 14) + 'px'; });
+            seg.addEventListener('mouseleave', function () { tip.hidden = true; });
+        });
+    }
+    var toggle = document.getElementById('catStageToggle');
+    var chart = document.getElementById('catStageChart');
+    var table = document.getElementById('catStageTable');
+    if (toggle && chart && table) {
+        toggle.addEventListener('click', function () {
+            var showingTable = !table.hidden;
+            table.hidden = showingTable;
+            chart.hidden = !showingTable;
+            toggle.textContent = showingTable ? 'View as table' : 'View as chart';
+        });
+    }
+})();
+</script>
+{% endif %}
 
 <div class="dash-grid">
     <div class="card">

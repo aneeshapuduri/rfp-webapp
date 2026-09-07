@@ -15,13 +15,37 @@
 
 <div class="card">
 {% if projects %}
+    {% if filter_label %}
+    <div class="active-filter-banner">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+        Filtered by <b>{{ filter_label }}</b>
+        <a href="/" class="active-filter-banner__clear" aria-label="Clear filter">&times;</a>
+    </div>
+    {% endif %}
     <div class="list-controls">
         {{ search_box("project-search", "table.project-table tbody tr[data-project-id]", "Search projects by name or status…", empty_id="project-search-empty") }}
-        {% if status_options | length > 1 %}
+        {% if status_options | length > 1 or group_options %}
         <select id="project-status-filter" class="status-filter-select" aria-label="Filter by status">
             <option value="">All statuses</option>
-            {% for raw, label in status_options %}
-            <option value="{{ raw }}">{{ label }}</option>
+            {% if group_options %}
+            <optgroup label="Groups">
+                {% for raw, label in group_options %}
+                <option value="{{ raw }}">{{ label }}</option>
+                {% endfor %}
+            </optgroup>
+            {% endif %}
+            <optgroup label="Individual statuses">
+                {% for raw, label in status_options %}
+                <option value="{{ raw }}">{{ label }}</option>
+                {% endfor %}
+            </optgroup>
+        </select>
+        {% endif %}
+        {% if category_options | length > 1 %}
+        <select id="project-category-filter" class="status-filter-select" aria-label="Filter by category">
+            <option value="">All categories</option>
+            {% for c in category_options %}
+            <option value="{{ c }}">{{ "Uncategorized" if c == "__none__" else c }}</option>
             {% endfor %}
         </select>
         {% endif %}
@@ -51,7 +75,7 @@
         </thead>
         <tbody>
             {% for p in projects %}
-            <tr class="clickable-row" data-project-id="{{ p.id }}" data-status="{{ p.status }}" data-price="{{ p.total_price or 0 }}">
+            <tr class="clickable-row" data-project-id="{{ p.id }}" data-status="{{ p.status }}" data-category="{{ p.category or '__none__' }}" data-price="{{ p.total_price or 0 }}">
                 <td class="cell-truncate"><a href="/projects/{{ p.id }}" title="{{ p.name }}">{{ p.name }}</a></td>
                 <td>{% if p.category %}<span class="cap-chip">{{ p.category }}</span>{% else %}<span class="cell-muted">—</span>{% endif %}</td>
                 <td>
@@ -85,30 +109,61 @@
     <p id="project-search-empty" class="search-empty-note" hidden>No projects match your search or filter.</p>
     <script>
     (function () {
+        // Mirrors main.py's STATUS_GROUPS — synthetic multi-status values the status dropdown
+        // offers (e.g. Home page's "Awaiting Client" tile covers two real statuses at once).
+        var STATUS_GROUPS = {
+            "__awaiting_client__": ["Clarifications Sent", "Responses Pending"],
+            "__in_review__": ["Analyzing", "Awaiting Assumptions Approval", "Awaiting Preview", "Ready to Generate"]
+        };
+
         var searchInput = document.getElementById('project-search');
         var statusSelect = document.getElementById('project-status-filter');
+        var categorySelect = document.getElementById('project-category-filter');
         var emptyNote = document.getElementById('project-search-empty');
         var rows = Array.prototype.slice.call(document.querySelectorAll('table.project-table tbody tr[data-project-id]'));
 
-        // Combined AND filter: text search and the status dropdown each narrow the same row
-        // set, rather than fighting each other — this runs after search_box's own built-in
+        function statusMatches(rowStatus, filterValue) {
+            if (!filterValue) return true;
+            if (STATUS_GROUPS[filterValue]) return STATUS_GROUPS[filterValue].indexOf(rowStatus) !== -1;
+            return rowStatus === filterValue;
+        }
+
+        // Combined AND filter: text search and both dropdowns each narrow the same row set,
+        // rather than fighting each other — this runs after search_box's own built-in
         // (text-only) filter on every keystroke, so it always has the final say.
         function applyFilters() {
             var q = (searchInput && searchInput.value.trim().toLowerCase()) || '';
             var status = statusSelect ? statusSelect.value : '';
+            var category = categorySelect ? categorySelect.value : '';
             var visible = 0;
             rows.forEach(function (row) {
                 var matchesText = q.length === 0 || row.textContent.toLowerCase().indexOf(q) !== -1;
-                var matchesStatus = !status || row.getAttribute('data-status') === status;
-                var show = matchesText && matchesStatus;
+                var matchesStatus = statusMatches(row.getAttribute('data-status'), status);
+                var matchesCategory = !category || row.getAttribute('data-category') === category;
+                var show = matchesText && matchesStatus && matchesCategory;
                 row.hidden = !show;
                 if (show) visible++;
             });
-            if (emptyNote) emptyNote.hidden = !((q.length > 0 || status) && visible === 0);
+            if (emptyNote) emptyNote.hidden = !((q.length > 0 || status || category) && visible === 0);
         }
 
         if (searchInput) searchInput.addEventListener('input', applyFilters);
         if (statusSelect) statusSelect.addEventListener('change', applyFilters);
+        if (categorySelect) categorySelect.addEventListener('change', applyFilters);
+
+        // Arriving via a link from the Home page (?status=...&category=...) pre-selects the
+        // matching dropdown option(s) — server-rendered, so this only runs if that option
+        // actually exists on this page (e.g. a status the current user has no projects in
+        // simply leaves its dropdown on "All").
+        var initialStatus = {{ initial_status | tojson }};
+        var initialCategory = {{ initial_category | tojson }};
+        if (initialStatus && statusSelect && statusSelect.querySelector('option[value="' + CSS.escape(initialStatus) + '"]')) {
+            statusSelect.value = initialStatus;
+        }
+        if (initialCategory && categorySelect && categorySelect.querySelector('option[value="' + CSS.escape(initialCategory) + '"]')) {
+            categorySelect.value = initialCategory;
+        }
+        applyFilters();
 
         // Sort by estimated value — toggles ascending/descending on repeated clicks. Rows with
         // no price (data-price="0", same as a genuine $0 estimate — this app never distinguishes
