@@ -15,7 +15,17 @@
 
 <div class="card">
 {% if projects %}
-    {{ search_box("project-search", "table.project-table tbody tr[data-project-id]", "Search projects by name or status…", empty_id="project-search-empty") }}
+    <div class="list-controls">
+        {{ search_box("project-search", "table.project-table tbody tr[data-project-id]", "Search projects by name or status…", empty_id="project-search-empty") }}
+        {% if status_options | length > 1 %}
+        <select id="project-status-filter" class="status-filter-select" aria-label="Filter by status">
+            <option value="">All statuses</option>
+            {% for raw, label in status_options %}
+            <option value="{{ raw }}">{{ label }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
+    </div>
     <div class="table-scroll">
     <table class="project-table table-fit" role="table">
         <caption class="visually-hidden">List of RFP proposal projects with status and dates</caption>
@@ -28,7 +38,12 @@
                 <th scope="col">Project</th>
                 <th scope="col">Category</th>
                 <th scope="col">Status</th>
-                <th scope="col">Est. Value</th>
+                <th scope="col">
+                    <button type="button" class="th-sort" id="sort-by-cost" aria-label="Sort by estimated value">
+                        Est. Value
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>
+                    </button>
+                </th>
                 <th scope="col">Created</th>
                 <th scope="col">Updated</th>
                 {% if current_user.role == "admin" %}<th scope="col" style="text-align:right;">Actions</th>{% endif %}
@@ -36,7 +51,7 @@
         </thead>
         <tbody>
             {% for p in projects %}
-            <tr class="clickable-row" data-project-id="{{ p.id }}" data-status="{{ p.status }}">
+            <tr class="clickable-row" data-project-id="{{ p.id }}" data-status="{{ p.status }}" data-price="{{ p.total_price or 0 }}">
                 <td class="cell-truncate"><a href="/projects/{{ p.id }}" title="{{ p.name }}">{{ p.name }}</a></td>
                 <td>{% if p.category %}<span class="cap-chip">{{ p.category }}</span>{% else %}<span class="cell-muted">—</span>{% endif %}</td>
                 <td>
@@ -67,7 +82,54 @@
         </tbody>
     </table>
     </div>
-    <p id="project-search-empty" class="search-empty-note" hidden>No projects match your search.</p>
+    <p id="project-search-empty" class="search-empty-note" hidden>No projects match your search or filter.</p>
+    <script>
+    (function () {
+        var searchInput = document.getElementById('project-search');
+        var statusSelect = document.getElementById('project-status-filter');
+        var emptyNote = document.getElementById('project-search-empty');
+        var rows = Array.prototype.slice.call(document.querySelectorAll('table.project-table tbody tr[data-project-id]'));
+
+        // Combined AND filter: text search and the status dropdown each narrow the same row
+        // set, rather than fighting each other — this runs after search_box's own built-in
+        // (text-only) filter on every keystroke, so it always has the final say.
+        function applyFilters() {
+            var q = (searchInput && searchInput.value.trim().toLowerCase()) || '';
+            var status = statusSelect ? statusSelect.value : '';
+            var visible = 0;
+            rows.forEach(function (row) {
+                var matchesText = q.length === 0 || row.textContent.toLowerCase().indexOf(q) !== -1;
+                var matchesStatus = !status || row.getAttribute('data-status') === status;
+                var show = matchesText && matchesStatus;
+                row.hidden = !show;
+                if (show) visible++;
+            });
+            if (emptyNote) emptyNote.hidden = !((q.length > 0 || status) && visible === 0);
+        }
+
+        if (searchInput) searchInput.addEventListener('input', applyFilters);
+        if (statusSelect) statusSelect.addEventListener('change', applyFilters);
+
+        // Sort by estimated value — toggles ascending/descending on repeated clicks. Rows with
+        // no price (data-price="0", same as a genuine $0 estimate — this app never distinguishes
+        // the two) sort as the lowest value in both directions, same as any other tied value.
+        var sortBtn = document.getElementById('sort-by-cost');
+        var tbody = document.querySelector('table.project-table tbody');
+        var sortAscending = true;
+        if (sortBtn && tbody) {
+            sortBtn.addEventListener('click', function () {
+                var sorted = rows.slice().sort(function (a, b) {
+                    var av = parseFloat(a.getAttribute('data-price')) || 0;
+                    var bv = parseFloat(b.getAttribute('data-price')) || 0;
+                    return sortAscending ? av - bv : bv - av;
+                });
+                sorted.forEach(function (row) { tbody.appendChild(row); });
+                sortAscending = !sortAscending;
+                sortBtn.classList.toggle('th-sort--desc', !sortAscending);
+            });
+        }
+    })();
+    </script>
 {% else %}
     <div class="empty-state">
         <div class="empty-state__icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg></div>
