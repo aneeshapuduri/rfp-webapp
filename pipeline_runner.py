@@ -31,12 +31,14 @@ from pipeline.clarification_doc_builder import build_clarification_doc
 from pipeline.document_builder import build_final_proposal
 from pipeline.document_validity import DocumentValidityResult, classify_document_validity
 from pipeline.go_no_go import assess_capability_fit
+from pipeline.key_dates_extractor import extract_key_dates
 from pipeline.phase1_pipeline import guess_agency, guess_project_title, run_phase1
 from pipeline.phase2_pipeline import resolve_with_responses
 from pipeline.phase3_pipeline import load_company_profile, run_phase3
 from pipeline.phase4_pipeline import ComplianceMatrixIncompleteError, run_phase4
 from pipeline.pricing_engine import build_pricing_summary
 from pipeline.response_reader import normalize_q_num, read_answer_rows
+from pipeline.response_structure_detector import detect_response_structure
 from pipeline.rfp_reader import read_rfp
 from pipeline.schema import Phase1Result
 from pipeline.template_mapper import extract_template_headings, map_sections_to_template
@@ -172,6 +174,8 @@ def process_new_upload(project_id: str, content: bytes, extension: str, skip_val
             if not validity.is_bid_document:
                 _record_invalid_document(project_id, validity)
                 return
+            _detect_rfp_structure(project_id, rfp_text, client)
+            _extract_key_dates(project_id, rfp_text, client)
 
         if client is None and DEMO_MODE:
             case = _detect_demo_case(rfp_text)
@@ -222,6 +226,36 @@ def _record_invalid_document(project_id: str, validity: DocumentValidityResult):
         "document_rejected_invalid", project_id,
         {"reasoning": validity.reasoning, "confidence": validity.confidence},
     )
+
+
+def _detect_rfp_structure(project_id: str, rfp_text: str, client: ClaudeClient):
+    """Checks whether the uploaded document itself dictates a required response structure (see
+    pipeline/response_structure_detector.py). Runs right after the validity check passes, using
+    the same live client — deliberately never fatal to the pipeline, exactly like
+    _run_capability_fit below: a failed or wrong detection should never block a real proposal
+    from being generated, it just means the third ("RFP-Specified Structure") template option
+    won't be offered for this project."""
+    try:
+        structure = detect_response_structure(rfp_text, client)
+        db.update_project(project_id, rfp_structure_json=json.dumps(structure.to_dict()))
+        db.log_action("rfp_structure_checked", project_id, {
+            "detected": structure.detected, "section_count": len(structure.sections),
+        })
+    except Exception:  # noqa: BLE001
+        logger.exception("[%s] RFP response-structure detection failed (non-fatal)", project_id)
+
+
+def _extract_key_dates(project_id: str, rfp_text: str, client: ClaudeClient):
+    """Extracts question/submission deadlines, evaluation period, and award date from the
+    uploaded document (see pipeline/key_dates_extractor.py) — surfaced later on the Go/No-Go
+    Summary tab. Non-fatal, exactly like _detect_rfp_structure above: a failed or empty
+    extraction just means the Summary tab shows no dates for this project."""
+    try:
+        dates = extract_key_dates(rfp_text, client)
+        db.update_project(project_id, key_dates_json=json.dumps(dates.to_dict()))
+        db.log_action("key_dates_extracted", project_id, {"found_any": dates.has_any()})
+    except Exception:  # noqa: BLE001
+        logger.exception("[%s] key-dates extraction failed (non-fatal)", project_id)
 
 
 def _run_capability_fit(project_id: str, result: Phase1Result):
@@ -389,8 +423,16 @@ def _run_phase3_and_4(project_id: str, result: Phase1Result, client: ClaudeClien
     else:
         phase3 = run_phase3(result, duration_months, client=client)
 
-    db.update_project(project_id, phase3_result_json=json.dumps(phase3.to_dict()))
+    db.update_project(
+        project_id,
+        phase3_result_json=json.dumps(phase3.to_dict()),
+        rate_research_json=json.dumps(phase3.rate_research) if phase3.rate_research else None,
+    )
     db.log_action("phase3_complete", project_id, {"total_price": phase3.pricing["total"]})
+    if phase3.rate_research:
+        db.log_action("market_rate_research_applied", project_id, {
+            "role_count": len(phase3.rate_research.get("per_role", {})),
+        })
 
     db.log_action("pipeline_started", project_id, {"stage": "phase4"})
     if client is None and demo_case:
@@ -420,14 +462,21 @@ def _run_phase3_and_4(project_id: str, result: Phase1Result, client: ClaudeClien
 
 
 def build_preview_document_bytes(content: dict, template_choice: str,
-                                  custom_template_bytes: bytes | None) -> bytes:
+                                  custom_template_bytes: bytes | None,
+                                  rfp_structure_sections: list[str] | None = None) -> bytes:
     """Builds exactly the same document finalize_proposal() would produce — the default fresh
-    document, or (for a custom template) the client's own template with matched sections
-    inserted in place and any sections it doesn't have appended under a 'Needs Manual
-    Placement' heading, via the existing template_mapper machinery — but just returns the bytes
-    instead of persisting anything. This is what powers the 'Download Preview Document' action:
-    the user can open the actual formatted document (in Word or similar) and review or edit it
-    directly, rather than only ever seeing plain web-form fields, before finalizing anything."""
+    document, a custom template with matched sections inserted in place (and any sections it
+    doesn't have appended under a 'Needs Manual Placement' heading), or a fresh document ordered
+    by the RFP's own detected response structure (see pipeline/response_structure_detector.py and
+    document_builder.py's RFP-structure branch) — but just returns the bytes instead of
+    persisting anything. This is what powers the 'Download Preview Document' action: the user can
+    open the actual formatted document (in Word or similar) and review or edit it directly,
+    rather than only ever seeing plain web-form fields, before finalizing anything.
+
+    `rfp_structure_sections` is the project's detected list of RFP-specified section headings
+    (rfp_structure_json's "sections") — only meaningful when template_choice == "rfp_structure";
+    the caller is responsible for reading it off the project row, since this function otherwise
+    has no project_id to look it up itself."""
     company = load_company_profile()
     full_content = dict(content)
     full_content["company"] = company
@@ -440,13 +489,17 @@ def build_preview_document_bytes(content: dict, template_choice: str,
             headings = extract_template_headings(template_path)
             mapping = map_sections_to_template(headings)
             build_final_proposal(tmp_path, full_content, template_path=template_path, section_mapping=mapping)
+        elif template_choice == "rfp_structure" and rfp_structure_sections:
+            mapping = map_sections_to_template(rfp_structure_sections)
+            build_final_proposal(tmp_path, full_content, rfp_headings=rfp_structure_sections, section_mapping=mapping)
         else:
             build_final_proposal(tmp_path, full_content)
         return pathlib.Path(tmp_path).read_bytes()
 
 
 def finalize_proposal(project_id: str, edited_content: dict, template_choice: str,
-                       custom_template_bytes: bytes | None, final_document_bytes: bytes | None = None):
+                       custom_template_bytes: bytes | None, final_document_bytes: bytes | None = None,
+                       rfp_structure_sections: list[str] | None = None):
     """Runs once the user submits the editable preview (POST /projects/{id}/preview/generate).
     This is the only place the final .docx is actually built now — everything before this point
     (Phase 1-4, the assumptions gate, the preview itself) only ever produced/edited JSON content.
@@ -461,7 +514,10 @@ def finalize_proposal(project_id: str, edited_content: dict, template_choice: st
         if final_document_bytes is not None:
             proposal_bytes = final_document_bytes
         else:
-            proposal_bytes = build_preview_document_bytes(edited_content, template_choice, custom_template_bytes)
+            proposal_bytes = build_preview_document_bytes(
+                edited_content, template_choice, custom_template_bytes,
+                rfp_structure_sections=rfp_structure_sections,
+            )
 
         stored_path, encrypted = storage.save_generated(project_id, "final_proposal.docx", proposal_bytes)
         db.add_document(project_id, "final_proposal", "final_proposal.docx", stored_path, encrypted)

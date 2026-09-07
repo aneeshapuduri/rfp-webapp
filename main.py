@@ -137,6 +137,7 @@ STATUS_LABELS = {
     "Submitted": "Submitted",
     "Declined": "Declined",
     "Cancelled": "Cancelled",
+    "No-Go": "No-Go",
 }
 
 # The order the pipeline actually moves projects through — drives the project-detail stepper.
@@ -154,7 +155,7 @@ STATUS_ORDER = [
     "Submitted",
 ]
 
-TERMINAL_BRANCH_STATUSES = {"Not a Bid Document", "Declined", "Cancelled"}
+TERMINAL_BRANCH_STATUSES = {"Not a Bid Document", "Declined", "Cancelled", "No-Go"}
 
 
 def _enrich_project(p: dict) -> dict:
@@ -303,7 +304,13 @@ def home(request: Request):
 def dashboard(request: Request):
     user = auth.current_user(request)
     projects = [_enrich_project(p) for p in db.list_projects_for_user(user)]
-    return templates.TemplateResponse(request, "dashboard.html", _ctx(request, projects=projects))
+    # Only offer statuses actually present in this user's project list — a status filter dropdown
+    # listing every possible pipeline stage, most with zero matching rows, is just noise.
+    present_statuses = {p["status"] for p in projects}
+    status_options = [(s, label) for s, label in STATUS_LABELS.items() if s in present_statuses]
+    return templates.TemplateResponse(
+        request, "dashboard.html", _ctx(request, projects=projects, status_options=status_options)
+    )
 
 
 @app.get("/new", response_class=HTMLResponse)
@@ -435,6 +442,30 @@ def project_detail(request: Request, project_id: str):
         if project["status"] == "Awaiting Preview":
             preview_content = content
 
+    rfp_structure = None
+    if project.get("rfp_structure_json"):
+        rfp_structure = json.loads(project["rfp_structure_json"])
+
+    rate_research_by_role = {}
+    if project.get("rate_research_json"):
+        rate_research_by_role = json.loads(project["rate_research_json"]).get("per_role", {})
+
+    key_dates = json.loads(project["key_dates_json"]) if project.get("key_dates_json") else None
+
+    # A simple binary read on top of the existing (3-tier) compliance matrix for the Go/No-Go
+    # summary — "Full Compliance" counts as Matched, anything else (Partial Compliance, Does Not
+    # Comply) counts as Not Matched. The full nuanced matrix is still shown as-is further down
+    # the page for anyone who wants the detail; this is just the at-a-glance tally + per-row
+    # badge the summary card asks for.
+    mandatory_match_summary = None
+    if compliance_matrix:
+        matched = sum(1 for m in compliance_matrix if "Full" in m.get("status", ""))
+        mandatory_match_summary = {
+            "matched": matched,
+            "not_matched": len(compliance_matrix) - matched,
+            "total": len(compliance_matrix),
+        }
+
     return templates.TemplateResponse(request, "project_detail.html", _ctx(request,
         project=project,
         documents=documents,
@@ -450,6 +481,10 @@ def project_detail(request: Request, project_id: str):
         compliance_matrix=compliance_matrix,
         pricing=pricing,
         preview_content=preview_content,
+        rfp_structure=rfp_structure,
+        rate_research_by_role=rate_research_by_role,
+        key_dates=key_dates,
+        mandatory_match_summary=mandatory_match_summary,
         can_upload_responses=project["status"] in ("Clarifications Sent", "Responses Pending"),
     ))
 
@@ -635,6 +670,45 @@ def reject_project(request: Request, project_id: str, _: None = Depends(auth.ver
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
+@app.post("/projects/{project_id}/go-no-go")
+async def record_go_no_go_decision(
+    request: Request,
+    project_id: str,
+    _: None = Depends(auth.verify_csrf),
+):
+    """The later-stage Go/No-Go gate on the proposal Summary tab — distinct from, and in
+    addition to, the early post-upload capability-fit check (capability_fit_json, shown in the
+    unrelated "Go / No-Go Decision" card above). This is not under /admin/* (it's a per-project
+    action alongside the rest of this file's project routes, not an admin console page), so
+    unlike an /admin/* route it needs its own explicit admin check here rather than relying on
+    AuthGateMiddleware. "Go" unlocks final-bid generation (see generate_final_proposal's check
+    above); "No-Go" moves the project to a new terminal status distinct from Cancelled (an
+    assumptions-stage rejection) and Declined (a completed proposal that was turned down) —
+    ineligibility discovered at this later, more-informed review gate is its own kind of stop."""
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if user["role"] != "admin":
+        raise HTTPException(403, "Only an admin can record the Go/No-Go decision.")
+    if project["status"] != "Awaiting Preview":
+        raise HTTPException(400, "This project isn't at the summary/Go-No-Go review step.")
+
+    form = await request.form()
+    decision = str(form.get("decision", ""))
+    if decision not in ("Go", "No-Go"):
+        raise HTTPException(400, "Invalid decision — must be 'Go' or 'No-Go'.")
+
+    fields = {
+        "go_no_go_decision": decision,
+        "go_no_go_decided_by": user["username"],
+        "go_no_go_decided_at": db.now(),
+    }
+    if decision == "No-Go":
+        fields["status"] = "No-Go"
+    db.update_project(project_id, **fields)
+    db.log_action("go_no_go_decided", project_id, {"decision": decision}, user_identity=user["username"])
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
 @app.post("/projects/{project_id}/reupload")
 async def reupload_bid_document(
     request: Request,
@@ -793,10 +867,13 @@ def _reassemble_preview_content(project: dict, form) -> dict:
     if "assumptions" in form:
         content["assumptions"] = [line.strip() for line in str(form["assumptions"]).split("\n") if line.strip()]
 
-    # Staffing/pricing: role and hourly_rate are read-only (tied to the rate card); only
-    # headcount and hours_per_person are user-editable. Recomputing via the same deterministic
-    # pricing engine used by Phase 3 keeps total_hours/subtotal/labor_subtotal/contingency/total
-    # arithmetically consistent no matter what the user changed.
+    # Staffing/pricing: role is read-only (tied to the rate card lookup key); headcount,
+    # hours_per_person, AND hourly_rate are all user-editable. The rate starts pre-filled with
+    # whatever Phase 3 already put there (a live market-rate research figure when available —
+    # see rate_research.py — otherwise the static rate card), but the user can always override
+    # it here before generating. Recomputing via the same deterministic pricing engine used by
+    # Phase 3 keeps total_hours/subtotal/labor_subtotal/contingency/total arithmetically
+    # consistent no matter what the user changed.
     staffing_row_count = int(form.get("staffing_row_count", 0) or 0)
     if staffing_row_count:
         edited_staffing_plan = []
@@ -804,11 +881,18 @@ def _reassemble_preview_content(project: dict, form) -> dict:
             role = form.get(f"staffing_role_{i}")
             if not role:
                 continue
-            edited_staffing_plan.append({
+            row = {
                 "role": str(role),
                 "headcount": int(form.get(f"staffing_headcount_{i}", 0) or 0),
                 "hours_per_person": int(form.get(f"staffing_hours_per_person_{i}", 0) or 0),
-            })
+            }
+            rate_raw = form.get(f"staffing_rate_{i}")
+            if rate_raw not in (None, ""):
+                try:
+                    row["hourly_rate"] = float(rate_raw)
+                except ValueError:
+                    pass  # an unparseable rate just falls back to the rate card, not a 400
+            edited_staffing_plan.append(row)
         if edited_staffing_plan:
             pricing = recompute_staffing_and_pricing(edited_staffing_plan)
             content["pricing"] = pricing
@@ -869,7 +953,18 @@ def _reassemble_preview_content(project: dict, form) -> dict:
 
 def _read_template_choice(form) -> str:
     template_choice = str(form.get("template_choice", "default"))
-    return template_choice if template_choice in ("default", "custom") else "default"
+    return template_choice if template_choice in ("default", "custom", "rfp_structure") else "default"
+
+
+def _read_rfp_structure_sections(project: dict) -> list[str]:
+    """The project's detected RFP-specified response-structure section headings (see
+    pipeline/response_structure_detector.py), or an empty list if none were detected — used both
+    to decide whether the "RFP-Specified Structure" template option is available for a project,
+    and to actually build a document under it."""
+    if not project.get("rfp_structure_json"):
+        return []
+    structure = json.loads(project["rfp_structure_json"])
+    return structure.get("sections", []) if structure.get("detected") else []
 
 
 @app.post("/projects/{project_id}/preview/document")
@@ -897,6 +992,7 @@ async def download_preview_document(
     template_choice = _read_template_choice(form)
 
     custom_template_bytes = None
+    rfp_structure_sections: list[str] = []
     if template_choice == "custom":
         custom_template = form.get("custom_template")
         if not _is_file_upload(custom_template):
@@ -906,9 +1002,16 @@ async def download_preview_document(
         except storage.UnsupportedFileType as e:
             raise HTTPException(400, str(e)) from e
         custom_template_bytes = await _read_capped(custom_template, storage.MAX_UPLOAD_BYTES)
+    elif template_choice == "rfp_structure":
+        rfp_structure_sections = _read_rfp_structure_sections(project)
+        if not rfp_structure_sections:
+            raise HTTPException(400, "No RFP-specified response structure was detected for this project.")
 
     try:
-        proposal_bytes = build_preview_document_bytes(content, template_choice, custom_template_bytes)
+        proposal_bytes = build_preview_document_bytes(
+            content, template_choice, custom_template_bytes,
+            rfp_structure_sections=rfp_structure_sections,
+        )
     except Exception as e:
         raise HTTPException(400, f"Couldn't build a preview document: {e}") from e
 
@@ -945,6 +1048,12 @@ async def generate_final_proposal(
         raise HTTPException(400, "This project isn't at the preview/customize step.")
     if not project.get("phase4_content_json"):
         raise HTTPException(400, "No generated content found to preview.")
+    if project.get("go_no_go_decision") != "Go":
+        raise HTTPException(
+            400,
+            "This project needs a Go decision from an admin (see the Summary & Final Go/No-Go "
+            "section above) before the final bid can be generated.",
+        )
 
     form = await request.form()
 
@@ -965,6 +1074,7 @@ async def generate_final_proposal(
     template_choice = _read_template_choice(form)
 
     custom_template_bytes = None
+    rfp_structure_sections: list[str] = []
     if final_document_bytes is None and template_choice == "custom":
         custom_template = form.get("custom_template")
         if not _is_file_upload(custom_template):
@@ -978,6 +1088,10 @@ async def generate_final_proposal(
             project_id, custom_template.filename, custom_template_bytes
         )
         db.add_document(project_id, "custom_template", display_name, stored_path, encrypted)
+    elif final_document_bytes is None and template_choice == "rfp_structure":
+        rfp_structure_sections = _read_rfp_structure_sections(project)
+        if not rfp_structure_sections:
+            raise HTTPException(400, "No RFP-specified response structure was detected for this project.")
 
     db.update_project(project_id, template_choice=template_choice)
     db.log_action("preview_submitted", project_id, {
@@ -985,7 +1099,8 @@ async def generate_final_proposal(
         "used_uploaded_final_document": final_document_bytes is not None,
     }, user_identity=user["username"])
     background_tasks.add_task(
-        finalize_proposal, project_id, content, template_choice, custom_template_bytes, final_document_bytes
+        finalize_proposal, project_id, content, template_choice, custom_template_bytes, final_document_bytes,
+        rfp_structure_sections=rfp_structure_sections,
     )
 
     # ?generating=1 tells the project page to show a "generating now" spinner and poll for

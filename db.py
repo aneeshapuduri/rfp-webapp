@@ -51,6 +51,7 @@ VALID_STATUSES = [
     "Submitted",
     "Declined",
     "Cancelled",
+    "No-Go",
 ]
 
 SCHEMA = """
@@ -143,6 +144,27 @@ _MIGRATIONS = [
     # Nullable so every project created before this feature shipped just shows no category
     # (rendered as "—") instead of breaking — only new projects are required to set one.
     ("projects", "category", "TEXT"),
+    # Per-project live market-rate research (one entry per staffing role: a researched
+    # starting hourly rate + a short sourcing note), produced during phase 4 and used to
+    # pre-fill the (editable) staffing/pricing table in the Awaiting Preview screen instead
+    # of always falling back to the static rate card. See pipeline/rate_research_prompts.py.
+    ("projects", "rate_research_json", "TEXT"),
+    # Detected RFP-specified response structure (an ordered list of section headings the RFP
+    # itself asked for), if any was found — offered as a third document-generation option
+    # alongside the default template and an uploaded custom template. Null/absent means no
+    # structure was detected (or the check hasn't run / predates this feature).
+    ("projects", "rfp_structure_json", "TEXT"),
+    # Key dates extracted from the uploaded bid document (question/clarification deadline,
+    # submission due date, evaluation period, award/results date) — free-text, not strict
+    # parsed dates, since RFPs phrase these inconsistently. Surfaced on the Summary tab.
+    ("projects", "key_dates_json", "TEXT"),
+    # The later-stage Go/No-Go gate on the Summary tab (distinct from, and in addition to,
+    # the existing early post-upload capability-fit check in capability_fit_json). Only an
+    # admin can set this; "Go" unlocks final-proposal generation, "No-Go" moves the project
+    # to the terminal "No-Go" status. Null until an admin decides.
+    ("projects", "go_no_go_decision", "TEXT"),
+    ("projects", "go_no_go_decided_by", "TEXT"),
+    ("projects", "go_no_go_decided_at", "TEXT"),
 ]
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
