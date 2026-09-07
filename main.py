@@ -157,6 +157,22 @@ STATUS_ORDER = [
 
 TERMINAL_BRANCH_STATUSES = {"Not a Bid Document", "Declined", "Cancelled", "No-Go"}
 
+# Synthetic multi-status groupings used only by the Home page's KPI tiles (a project's actual
+# `status` column is always one single value from STATUS_LABELS above — these keys never appear
+# there). Defined once here so home()'s tile counts, the dashboard's status filter dropdown, and
+# the dashboard's client-side filter script all agree on exactly which statuses each tile means,
+# instead of three separate copies of the same status lists drifting apart over time.
+STATUS_GROUPS = {
+    "__awaiting_client__": {
+        "label": "Awaiting Client",
+        "statuses": ["Clarifications Sent", "Responses Pending"],
+    },
+    "__in_review__": {
+        "label": "In Review",
+        "statuses": ["Analyzing", "Awaiting Assumptions Approval", "Awaiting Preview", "Ready to Generate"],
+    },
+}
+
 
 def _enrich_project(p: dict) -> dict:
     p = dict(p)
@@ -273,19 +289,103 @@ def logout(request: Request, _: None = Depends(auth.verify_csrf)):
 
 # ---------- Home ----------
 
+# Cap on how many of the busiest categories / most common statuses the Home page's stacked-bar
+# breakdown renders as their own row/segment — matches the "Top 5" framing already used by the
+# rest of the app's summary widgets. Anything past the cap is folded into an "Other" bucket
+# rather than dropped, so the totals a viewer sees always add up to the real count.
+_CATEGORY_STAGE_TOP_N = 5
+
+
+def _status_slug(status: str) -> str:
+    """Matches the `status-{{ p.status | replace(' ', '-') | lower }}` CSS class convention
+    used throughout the templates, so chart segments can reuse the same status-color rules."""
+    return status.replace(" ", "-").lower()
+
+
+def _build_category_stage_chart(projects: list[dict]) -> dict | None:
+    """Top categories x top statuses breakdown for the Home page's stacked-bar chart. Returns
+    None when there's nothing meaningful to chart (no categorized projects yet)."""
+    status_counts: dict[str, int] = {}
+    category_counts: dict[str, int] = {}
+    for p in projects:
+        status_counts[p["status"]] = status_counts.get(p["status"], 0) + 1
+        cat = p.get("category") or "__none__"
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+
+    if not category_counts:
+        return None
+
+    top_statuses = sorted(status_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:_CATEGORY_STAGE_TOP_N]
+    top_status_keys = {s for s, _ in top_statuses}
+    top_status_defs = [
+        {"status": s, "slug": _status_slug(s), "label": STATUS_LABELS.get(s, s), "count": n}
+        for s, n in top_statuses
+    ]
+
+    sorted_categories = sorted(category_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    top_categories = sorted_categories[:_CATEGORY_STAGE_TOP_N]
+    max_total = top_categories[0][1] if top_categories else 0
+    # Round the shared axis up to a multiple of 4 so the quarter-ticks (0/25/50/75/100%) always
+    # land on whole project counts instead of fractions like 2.5.
+    axis_max = max(4, ((max_total + 3) // 4) * 4)
+    axis_ticks = [round(axis_max * f) for f in (0, 0.25, 0.5, 0.75, 1)]
+
+    per_category_status_counts: dict[str, dict[str, int]] = {}
+    for p in projects:
+        cat = p.get("category") or "__none__"
+        if cat not in dict(top_categories):
+            continue
+        bucket = per_category_status_counts.setdefault(cat, {})
+        bucket[p["status"]] = bucket.get(p["status"], 0) + 1
+
+    categories = []
+    for cat, total in top_categories:
+        counts = per_category_status_counts.get(cat, {})
+        segments = [
+            {
+                "status": s, "slug": _status_slug(s), "label": STATUS_LABELS.get(s, s),
+                "count": counts.get(s, 0), "width_pct": round((counts.get(s, 0) / total) * 100, 2),
+            }
+            for s in top_status_keys if counts.get(s, 0) > 0
+        ]
+        # Keep segment order stable (matches top_status_defs order) rather than dict-iteration order.
+        segments.sort(key=lambda seg: [s for s, _ in top_statuses].index(seg["status"]))
+        other_count = sum(n for s, n in counts.items() if s not in top_status_keys)
+        categories.append({
+            "name": "Uncategorized" if cat == "__none__" else cat,
+            "filter_value": cat,
+            "total": total,
+            "width_pct": round((total / axis_max) * 100, 2),
+            "segments": segments,
+            "other_count": other_count,
+            "other_width_pct": round((other_count / total) * 100, 2) if other_count else 0,
+        })
+
+    return {
+        "top_statuses": top_status_defs,
+        "categories": categories,
+        "other_categories_count": max(0, len(sorted_categories) - len(top_categories)),
+        "other_statuses_count": max(0, len(status_counts) - len(top_statuses)),
+        "total_categories": len(sorted_categories),
+        "total_statuses": len(status_counts),
+        "axis_max": axis_max,
+        "axis_ticks": axis_ticks,
+    }
+
+
 @app.get("/home", response_class=HTMLResponse)
 def home(request: Request):
     user = auth.current_user(request)
     projects = [_enrich_project(p) for p in db.list_projects_for_user(user)]
 
-    awaiting_client = sum(1 for p in projects if p["status"] in ("Clarifications Sent", "Responses Pending"))
-    in_review = sum(1 for p in projects if p["status"] in
-                    ("Analyzing", "Awaiting Assumptions Approval", "Awaiting Preview", "Ready to Generate"))
+    awaiting_client = sum(1 for p in projects if p["status"] in STATUS_GROUPS["__awaiting_client__"]["statuses"])
+    in_review = sum(1 for p in projects if p["status"] in STATUS_GROUPS["__in_review__"]["statuses"])
     submitted = sum(1 for p in projects if p["status"] == "Submitted")
     needs_attention = sum(1 for p in projects if p.get("error_message"))
 
     recent_projects = projects[:6]
     recent_activity = db.list_audit_log_for_user(user, limit=6, filter_mode="user")
+    category_stage_chart = _build_category_stage_chart(projects)
 
     return templates.TemplateResponse(request, "home.html", _ctx(request,
         total_projects=len(projects),
@@ -295,6 +395,7 @@ def home(request: Request):
         needs_attention=needs_attention,
         recent_projects=recent_projects,
         recent_activity=recent_activity,
+        category_stage_chart=category_stage_chart,
     ))
 
 
@@ -308,8 +409,42 @@ def dashboard(request: Request):
     # listing every possible pipeline stage, most with zero matching rows, is just noise.
     present_statuses = {p["status"] for p in projects}
     status_options = [(s, label) for s, label in STATUS_LABELS.items() if s in present_statuses]
+    group_options = [
+        (key, cfg["label"]) for key, cfg in STATUS_GROUPS.items()
+        if present_statuses & set(cfg["statuses"])
+    ]
+    present_categories = {p.get("category") or "__none__" for p in projects}
+    category_options = sorted(c for c in present_categories if c != "__none__")
+    if "__none__" in present_categories:
+        category_options.append("__none__")
+
+    # Links from the Home page's KPI tiles and category chart arrive as ?status=...&category=...
+    # (plus an optional ?label= override for the banner text) — these only ever pre-select the
+    # existing filter dropdowns client-side (see dashboard.html's script); the server never
+    # filters `projects` itself, so a bookmarked/shared link still shows the search box and both
+    # dropdowns in their normal interactive state, just pre-set to match.
+    initial_status = request.query_params.get("status", "")
+    initial_category = request.query_params.get("category", "")
+    explicit_label = request.query_params.get("label", "")
+    label_parts = []
+    if explicit_label:
+        label_parts = [explicit_label]
+    else:
+        if initial_status:
+            if initial_status in STATUS_GROUPS:
+                label_parts.append(STATUS_GROUPS[initial_status]["label"])
+            else:
+                label_parts.append(STATUS_LABELS.get(initial_status, initial_status))
+        if initial_category:
+            label_parts.append("Uncategorized" if initial_category == "__none__" else initial_category)
+    filter_label = " · ".join(label_parts)
+
     return templates.TemplateResponse(
-        request, "dashboard.html", _ctx(request, projects=projects, status_options=status_options)
+        request, "dashboard.html", _ctx(
+            request, projects=projects, status_options=status_options, group_options=group_options,
+            category_options=category_options, initial_status=initial_status,
+            initial_category=initial_category, filter_label=filter_label,
+        )
     )
 
 
