@@ -3,6 +3,7 @@ Thin wrapper around the Google Gemini API, matching the exact same interface as
 claude_client.ClaudeClient (generate_text / generate_json) so the rest of the pipeline never
 needs to know which provider is actually running underneath it.
 """
+import logging
 import os
 import random
 import re
@@ -12,6 +13,8 @@ from google import genai
 from google.genai import types
 
 from json_utils import parse_llm_json
+
+logger = logging.getLogger("rfp_agent.pipeline.gemini_client")
 
 MODEL = "gemini-3.1-flash-lite"
 MAX_RETRIES = 4
@@ -102,3 +105,38 @@ class GeminiClient:
             user,
         )
         return parse_llm_json(raw, "Gemini")
+
+    def generate_json_with_search(self, system: str, user: str, max_tokens: int = 2000) -> list | dict:
+        """Same contract as generate_json, but grounds the response in Google Search results via
+        Gemini's google_search grounding tool — for content that must reflect current real-world
+        data (e.g. market rate research) rather than potentially stale training data.
+
+        Grounding tools and response_mime_type="application/json" are mutually exclusive on this
+        API, so this call relies on the prompt itself (see rate_research_prompts.py) to ask for
+        JSON-only output, same as generate_text always has — parse_llm_json already tolerates a
+        markdown-fenced response, which is the most common way a model deviates from "JSON only"
+        once mime-type enforcement is off the table.
+
+        Falls back to the plain non-search generate_json call if the search-enabled call fails
+        for any reason (an older API/SDK version that doesn't support this tool, a network
+        restriction in this deployment's environment, a rate limit, or any other transient
+        error) — search grounding is a nice-to-have improvement on the underlying figures here,
+        never a hard dependency the caller can't proceed without."""
+        try:
+            raw = self._generate_with_retry(
+                {
+                    "system_instruction": system,
+                    "max_output_tokens": max_tokens,
+                    "tools": [types.Tool(google_search=types.GoogleSearch())],
+                },
+                user,
+            )
+            if not raw:
+                raise RuntimeError("Web-search-enabled call returned no text content.")
+            return parse_llm_json(raw, "Gemini (web search)")
+        except Exception:  # noqa: BLE001 - fall back rather than fail the caller
+            logger.warning(
+                "generate_json_with_search failed — falling back to a plain (non-search) call",
+                exc_info=True,
+            )
+            return self.generate_json(system, user, max_tokens=max_tokens)

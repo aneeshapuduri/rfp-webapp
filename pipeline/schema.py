@@ -132,6 +132,12 @@ class Phase3Result:
     pricing: dict  # PricingSummary.to_dict()
     sanity_flags: list[dict]  # [{"severity": ..., "message": ...}]
     duration_months: float
+    # Live web-search-grounded market-rate research applied to this staffing plan's starting
+    # rates (see rate_research.py) — RateResearchResult.to_dict(), or None when it wasn't run
+    # (demo mode) or found nothing usable. Never reconstructed from this dict (Phase3Result has
+    # no from_dict — see phase3_pipeline.py), so adding this field is backward compatible with
+    # any phase3_result_json written before this feature existed.
+    rate_research: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -141,4 +147,5 @@ class Phase3Result:
             "sanity_flags": self.sanity_flags,
             "duration_months": self.duration_months,
             "has_blocking_errors": any(f["severity"] == "error" for f in self.sanity_flags),
+            "rate_research": self.rate_research,
         }

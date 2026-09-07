@@ -626,16 +626,75 @@ def _build_final_proposal_with_template(output_path: str, content: dict, templat
     return output_path
 
 
+def _build_final_proposal_with_rfp_structure(output_path: str, content: dict, rfp_headings: list[str],
+                                              section_mapping: dict | None):
+    """Writes a fresh document (cover page, TOC, and footer all included, exactly like the
+    default no-template path — there's no client template to inherit styling from here, just a
+    detected list of section names) but organizes it under the RFP's OWN requested section
+    headings and order instead of our standard 31-section template. Each of our canonical
+    sections that fuzzy-matched to one of the RFP's headings (see template_mapper) is rendered
+    under that heading, using the RFP's own wording, in the RFP's own order. Any canonical
+    section that didn't match anything the RFP asked for is appended at the end under one
+    'Additional Sections' heading — same 'never silently drop generated content' guarantee as
+    the custom-template path's 'Needs Manual Placement' block, just under a name that fits this
+    case (nothing here needs manual placement in someone else's document — it's just content the
+    RFP didn't explicitly request a section for)."""
+    company = content["company"]
+    doc = Document()
+    _style_base(doc)
+    _add_cover_page(doc, content["project_title"], content["agency"], company)
+    _add_toc(doc)
+    _add_footer(doc, content["project_title"])
+
+    mapping = section_mapping or {"matched": {}, "unmatched": list(OUR_SECTIONS)}
+    heading_to_section = {heading: section for section, heading in mapping.get("matched", {}).items()}
+
+    sink = _AppendSink(doc)
+    for heading in rfp_headings:
+        our_section = heading_to_section.get(heading)
+        if our_section is None:
+            continue
+        doc.add_heading(heading, level=1)
+        renderer = SECTION_RENDERERS.get(our_section)
+        if renderer is not None:
+            renderer(sink, content, company)
+
+    unmatched = mapping.get("unmatched", [])
+    if unmatched:
+        doc.add_heading("Additional Sections", level=1)
+        note = doc.add_paragraph()
+        note.add_run(
+            "The RFP's specified response structure didn't explicitly call for the following "
+            "sections; they're included here so no generated content is left out."
+        ).italic = True
+        for our_section in unmatched:
+            doc.add_heading(our_section, level=2)
+            _append_section_content(doc, our_section, content, company)
+
+    _render_extra_sections(doc, content)
+
+    doc.save(output_path)
+    return output_path
+
+
 def build_final_proposal(output_path: str, content: dict, template_path: str | None = None,
-                          section_mapping: dict | None = None):
+                          section_mapping: dict | None = None, rfp_headings: list[str] | None = None):
     """content: the dict returned by phase4_pipeline.run_phase4() (optionally edited by the user
     in the preview stage). When template_path is given (a client-uploaded .docx), section_mapping
     should be the dict returned by template_mapper.map_sections_to_template() for that same
     template's headings — content is then written into the client's own document instead of a
-    fresh one (see _build_final_proposal_with_template). template_path is None reproduces the
-    original default-template behavior exactly as before this parameter existed."""
+    fresh one (see _build_final_proposal_with_template). When template_path is None but
+    rfp_headings is given (the RFP's own detected list of required response-section headings —
+    see pipeline/response_structure_detector.py), section_mapping should instead be
+    map_sections_to_template(rfp_headings), and a fresh document is built ordered by those
+    headings (see _build_final_proposal_with_rfp_structure). Both template_path and rfp_headings
+    absent reproduces the original default-template behavior exactly as before either parameter
+    existed."""
     if template_path is not None:
         return _build_final_proposal_with_template(output_path, content, template_path, section_mapping)
+
+    if rfp_headings:
+        return _build_final_proposal_with_rfp_structure(output_path, content, rfp_headings, section_mapping)
 
     company = content["company"]
     doc = Document()

@@ -80,8 +80,12 @@ def load_rate_card() -> dict:
 def build_pricing_summary(staffing_plan: list[dict]) -> PricingSummary:
     """
     staffing_plan: list of {"role", "headcount", "hours_per_person", "rationale"} — the raw
-    output from the SA staffing prompt (or demo data). Looks up each role's rate from the
-    Phase 0 rate card; raises if a role isn't in the catalog rather than guessing a rate.
+    output from the SA staffing prompt (or demo data), plus an optional "hourly_rate" per item.
+    When "hourly_rate" is present it's used as-is (this is how a live market-rate research
+    figure — see rate_research.py — or a user's edit in the preview stage overrides the static
+    rate card, without this function ever needing to know which); when absent, the rate is
+    looked up from the Phase 0 rate card as before. A role that's both missing an override AND
+    absent from the rate card raises rather than guessing a rate.
     """
     rate_card = load_rate_card()
     rate_lookup = {r["role"]: r["blended_hourly_rate"] for r in rate_card["roles"]}
@@ -90,7 +94,12 @@ def build_pricing_summary(staffing_plan: list[dict]) -> PricingSummary:
     lines = []
     for item in staffing_plan:
         role = item["role"]
-        if role not in rate_lookup:
+        override_rate = item.get("hourly_rate")
+        if override_rate is not None:
+            hourly_rate = float(override_rate)
+        elif role in rate_lookup:
+            hourly_rate = rate_lookup[role]
+        else:
             raise ValueError(
                 f"Role '{role}' is not in the rate card catalog — refusing to guess a rate. "
                 f"Valid roles: {sorted(rate_lookup.keys())}"
@@ -99,7 +108,7 @@ def build_pricing_summary(staffing_plan: list[dict]) -> PricingSummary:
             role=role,
             headcount=int(item["headcount"]),
             hours_per_person=int(item["hours_per_person"]),
-            hourly_rate=rate_lookup[role],
+            hourly_rate=hourly_rate,
             rationale=item.get("rationale", ""),
         ))
 
