@@ -113,6 +113,18 @@ CREATE TABLE IF NOT EXISTS project_access (
     granted_by TEXT,
     PRIMARY KEY (user_id, project_id)
 );
+
+-- Admin-configured list of project categories, offered as a required dropdown when a project
+-- is created (see main.py's create_project). A project stores the category *name* it was
+-- created with (projects.category, a plain string, not a foreign key) rather than this row's
+-- id — so if an admin later deletes a category, every project already tagged with it keeps
+-- showing that label instead of going blank; it just drops out of the dropdown for new projects.
+CREATE TABLE IF NOT EXISTS categories (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    created_by TEXT
+);
 """
 
 # Columns added after the initial release — applied for databases created before this column
@@ -128,6 +140,9 @@ _MIGRATIONS = [
     # review/editing before the user explicitly submits them (see main.py's upload_responses and
     # submit_client_responses routes). Cleared once submitted.
     ("projects", "pending_client_responses_json", "TEXT"),
+    # Nullable so every project created before this feature shipped just shows no category
+    # (rendered as "—") instead of breaking — only new projects are required to set one.
+    ("projects", "category", "TEXT"),
 ]
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
@@ -244,13 +259,13 @@ def new_id() -> str:
 
 # ---------- Projects ----------
 
-def create_project(name: str, agency: str = "", created_by: str | None = None) -> str:
+def create_project(name: str, agency: str = "", created_by: str | None = None, category: str | None = None) -> str:
     pid = new_id()
     conn = get_conn()
     conn.execute(
-        "INSERT INTO projects (id, name, agency, status, created_at, updated_at, duration_months, created_by) "
-        "VALUES (?, ?, ?, 'Analyzing', ?, ?, 9, ?)",
-        (pid, name, agency, now(), now(), created_by),
+        "INSERT INTO projects (id, name, agency, status, created_at, updated_at, duration_months, created_by, category) "
+        "VALUES (?, ?, ?, 'Analyzing', ?, ?, 9, ?, ?)",
+        (pid, name, agency, now(), now(), created_by, category),
     )
     conn.commit()
     conn.close()
@@ -325,6 +340,50 @@ def get_document(doc_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+# ---------- Categories ----------
+# Admin-configured; offered to every user as the required dropdown on the "New Project" form.
+# Ordered alphabetically since this is a picklist a user scans, not a recency-ordered feed.
+
+def list_categories() -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM categories ORDER BY name ASC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_category(category_id: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM categories WHERE id = ?", (category_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_category_by_name(name: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM categories WHERE name = ?", (name,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def create_category(name: str, created_by: str | None = None) -> str:
+    cid = new_id()
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO categories (id, name, created_at, created_by) VALUES (?, ?, ?, ?)",
+        (cid, name, now(), created_by),
+    )
+    conn.commit()
+    conn.close()
+    return cid
+
+
+def delete_category(category_id: str):
+    conn = get_conn()
+    conn.execute("DELETE FROM categories WHERE id = ?", (category_id,))
+    conn.commit()
+    conn.close()
 
 
 # ---------- Project access ----------

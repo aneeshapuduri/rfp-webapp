@@ -308,7 +308,7 @@ def dashboard(request: Request):
 
 @app.get("/new", response_class=HTMLResponse)
 def new_project_form(request: Request):
-    return templates.TemplateResponse(request, "new_project.html", _ctx(request))
+    return templates.TemplateResponse(request, "new_project.html", _ctx(request, categories=db.list_categories()))
 
 
 @app.post("/projects")
@@ -316,12 +316,27 @@ async def create_project(
     request: Request,
     background_tasks: BackgroundTasks,
     project_name: str = Form(...),
+    category: str = Form(""),
     bid_file: UploadFile = File(...),
     _: None = Depends(auth.verify_csrf),
 ):
     user = auth.current_user(request)
+    categories = db.list_categories()
+
+    def _rerender(error: str, status_code: int = 400):
+        return templates.TemplateResponse(
+            request, "new_project.html",
+            _ctx(request, error=error, project_name=project_name, category=category, categories=categories),
+            status_code=status_code,
+        )
+
     if not project_name.strip():
-        raise HTTPException(400, "Project name is required.")
+        return _rerender("Project name is required.")
+    if not categories:
+        return _rerender("No categories are configured yet — ask an admin to add one under "
+                          "Admin · Categories before creating a project.")
+    if not category or not db.get_category_by_name(category):
+        return _rerender("Choose a category from the list.")
 
     try:
         content = await _read_capped(bid_file, storage.MAX_UPLOAD_BYTES)
@@ -363,16 +378,13 @@ async def create_project(
             error = "This file doesn't look like a bid invitation or RFP — no project was created."
             if validity.reasoning:
                 error += f" {validity.reasoning}"
-            return templates.TemplateResponse(
-                request, "new_project.html",
-                _ctx(request, error=error, project_name=project_name),
-                status_code=400,
-            )
+            return _rerender(error)
 
-    project_id = db.create_project(name=project_name.strip(), created_by=user["username"])
+    project_id = db.create_project(name=project_name.strip(), created_by=user["username"], category=category)
     display_name, stored_path, encrypted = storage.save_upload(project_id, bid_file.filename, content)
     db.add_document(project_id, "bid_invitation", display_name, stored_path, encrypted)
-    db.log_action("project_created", project_id, {"name": project_name, "filename": display_name},
+    db.log_action("project_created", project_id,
+                  {"name": project_name, "filename": display_name, "category": category},
                   user_identity=user["username"])
 
     background_tasks.add_task(
@@ -1100,3 +1112,51 @@ def admin_activate_user(request: Request, user_id: str, _: None = Depends(auth.v
     db.set_user_active(user_id, True)
     db.log_action("user_activated", detail={"target_username": target["username"]}, user_identity=admin_user["username"])
     return RedirectResponse("/admin/users", status_code=303)
+
+
+# ---------- Admin: project categories ----------
+# Everything under /admin/* is already gated to the 'admin' role by AuthGateMiddleware (see
+# auth.py) — no per-route check needed here, same as the user-management routes above.
+
+@app.get("/admin/categories", response_class=HTMLResponse)
+def admin_categories(request: Request):
+    return templates.TemplateResponse(
+        request, "admin_categories.html", _ctx(request, categories=db.list_categories())
+    )
+
+
+@app.post("/admin/categories")
+def admin_create_category(request: Request, name: str = Form(...), _: None = Depends(auth.verify_csrf)):
+    admin_user = auth.current_user(request)
+    name = name.strip()
+
+    error = None
+    if not name:
+        error = "Category name is required."
+    elif db.get_category_by_name(name):
+        error = f"A category named \"{name}\" already exists."
+
+    if error:
+        return templates.TemplateResponse(
+            request, "admin_categories.html",
+            _ctx(request, categories=db.list_categories(), error=error),
+            status_code=400,
+        )
+
+    db.create_category(name, created_by=admin_user["username"])
+    db.log_action("category_created", detail={"name": name}, user_identity=admin_user["username"])
+    return RedirectResponse("/admin/categories", status_code=303)
+
+
+@app.post("/admin/categories/{category_id}/delete")
+def admin_delete_category(request: Request, category_id: str, _: None = Depends(auth.verify_csrf)):
+    admin_user = auth.current_user(request)
+    target = db.get_category(category_id)
+    if not target:
+        raise HTTPException(404, "Category not found.")
+    db.delete_category(category_id)
+    # Existing projects already tagged with this category keep showing its name (it's stored as
+    # plain text on the project row, not a foreign key) — only the dropdown for new projects
+    # loses this option.
+    db.log_action("category_deleted", detail={"name": target["name"]}, user_identity=admin_user["username"])
+    return RedirectResponse("/admin/categories", status_code=303)
