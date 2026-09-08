@@ -68,6 +68,14 @@ def build_go_no_go_suggestion_prompt(
             "overall": capability_fit.get("overall"),
             "coverage_pct": capability_fit.get("coverage_pct"),
             "reasoning": _trim(capability_fit.get("reasoning")),
+            # The specific asks that don't map to anything we've stated we can do — "flag
+            # anything we don't have" needs the actual list here, not just the aggregate
+            # coverage percentage, so the model can call out particular capability gaps by name
+            # rather than only repeating the overall score.
+            "capabilities_we_dont_have": capability_fit.get("unmatched_capabilities", [])[:25],
+            "requirements_with_no_matching_capability": [
+                g.get("requirement", "") for g in capability_fit.get("gaps", [])
+            ][:25],
         } if capability_fit else None,
         "compliance_matrix_summary": {
             "matched": matched,

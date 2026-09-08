@@ -63,6 +63,23 @@ class CapabilityGap:
 
 
 @dataclass
+class RequirementCapabilityMatch:
+    """Per-requirement result of the same keyword-overlap check assess_capability_fit runs to
+    build the aggregate CapabilityFit — one row per extracted requirement/ask, so the Summary
+    tab can show "Available in Pamten: Yes/No" against every single item from the RFP, not just
+    the aggregate coverage percentage and the (unmatched-only) gaps list below. `available` is
+    exactly the inverse of "this requirement's id appears in `gaps`" — kept as an explicit,
+    readable field rather than making the template re-derive it from the gaps list."""
+    requirement_id: str
+    requirement: str
+    available: bool
+    matched_capabilities: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
 class CapabilityFit:
     overall: str  # "Go" | "Go, with gaps" | "No-Go"
     reasoning: str
@@ -70,6 +87,9 @@ class CapabilityFit:
     matched_capabilities: list[str] = field(default_factory=list)
     unmatched_capabilities: list[str] = field(default_factory=list)
     gaps: list[CapabilityGap] = field(default_factory=list)
+    # Every extracted requirement, matched or not — see RequirementCapabilityMatch above.
+    # Optional/empty on data written before this field existed (from_dict defaults it to []).
+    per_requirement: list[RequirementCapabilityMatch] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -79,6 +99,7 @@ class CapabilityFit:
             "matched_capabilities": self.matched_capabilities,
             "unmatched_capabilities": self.unmatched_capabilities,
             "gaps": [g.to_dict() for g in self.gaps],
+            "per_requirement": [r.to_dict() for r in self.per_requirement],
         }
 
     @staticmethod
@@ -90,6 +111,7 @@ class CapabilityFit:
             matched_capabilities=d.get("matched_capabilities", []),
             unmatched_capabilities=d.get("unmatched_capabilities", []),
             gaps=[CapabilityGap(**g) for g in d.get("gaps", [])],
+            per_requirement=[RequirementCapabilityMatch(**r) for r in d.get("per_requirement", [])],
         )
 
 
@@ -102,19 +124,26 @@ def assess_capability_fit(result: Phase1Result, core_capabilities: list[str]) ->
 
     matched_capability_names: set[str] = set()
     gaps: list[CapabilityGap] = []
+    per_requirement: list[RequirementCapabilityMatch] = []
     matched_req_count = 0
 
     for req in result.requirements:
         req_tokens = _tokenize(f"{req.requirement} {req.source_section}")
         hit_any = False
+        req_matched_caps: list[str] = []
         for cap, cap_tokens in capability_keywords.items():
             if req_tokens & cap_tokens:
                 matched_capability_names.add(cap)
+                req_matched_caps.append(cap)
                 hit_any = True
         if hit_any:
             matched_req_count += 1
         else:
             gaps.append(CapabilityGap(requirement_id=req.id, requirement=req.requirement))
+        per_requirement.append(RequirementCapabilityMatch(
+            requirement_id=req.id, requirement=req.requirement,
+            available=hit_any, matched_capabilities=req_matched_caps,
+        ))
 
     total = len(result.requirements)
     coverage_pct = round(100.0 * matched_req_count / total, 1) if total else 0.0
@@ -150,4 +179,5 @@ def assess_capability_fit(result: Phase1Result, core_capabilities: list[str]) ->
         matched_capabilities=sorted(matched_capability_names),
         unmatched_capabilities=unmatched_capabilities,
         gaps=gaps,
+        per_requirement=per_requirement,
     )
