@@ -49,6 +49,11 @@
         <div class="kpi__value">{{ submitted }}</div>
         <div class="kpi__label">Submitted</div>
     </a>
+    <a class="kpi kpi--danger" href="/?status=Declined" title="View declined projects">
+        <div class="kpi__icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div>
+        <div class="kpi__value">{{ declined }}</div>
+        <div class="kpi__label">Declined</div>
+    </a>
 </div>
 
 {% if category_stage_chart %}
@@ -75,21 +80,19 @@
             {% for c in category_stage_chart.categories %}
             <div class="cat-stage-row">
                 <a class="cat-stage-row__label" href="/?category={{ c.filter_value | urlencode }}&amp;label={{ c.name | urlencode }}" title="View all {{ c.name }} projects">{{ c.name }}</a>
-                <div class="cat-stage-row__track">
-                    <div class="cat-stage-bar" style="width:{{ c.width_pct }}%;">
-                        {% for seg in c.segments %}
-                        <a class="seg stage-seg-{{ seg.slug }}" style="width:{{ seg.width_pct }}%;"
-                           href="/?status={{ seg.status | urlencode }}&amp;category={{ c.filter_value | urlencode }}&amp;label={{ (c.name ~ ' — ' ~ seg.label) | urlencode }}"
-                           data-tip="{{ c.name }} — {{ seg.label }}: {{ seg.count }}"></a>
-                        {% endfor %}
-                        {% if c.other_count > 0 %}
-                        <a class="seg stage-seg-other" style="width:{{ c.other_width_pct }}%;"
-                           href="/?category={{ c.filter_value | urlencode }}&amp;label={{ c.name | urlencode }}"
-                           data-tip="{{ c.name }} — Other stages: {{ c.other_count }}"></a>
-                        {% endif %}
-                    </div>
-                    <span class="cat-stage-row__total">{{ c.total }}</span>
+                <div class="cat-stage-bar" style="width:{{ c.width_pct }}%;">
+                    {% for seg in c.segments %}
+                    <a class="seg stage-seg-{{ seg.slug }}" style="width:{{ seg.width_pct }}%;"
+                       href="/?status={{ seg.status | urlencode }}&amp;category={{ c.filter_value | urlencode }}&amp;label={{ (c.name ~ ' — ' ~ seg.label) | urlencode }}"
+                       data-tip="{{ c.name }} — {{ seg.label }}: {{ seg.count }}"></a>
+                    {% endfor %}
+                    {% if c.other_count > 0 %}
+                    <a class="seg stage-seg-other" style="width:{{ c.other_width_pct }}%;"
+                       href="/?category={{ c.filter_value | urlencode }}&amp;label={{ c.name | urlencode }}"
+                       data-tip="{{ c.name }} — Other stages: {{ c.other_count }}"></a>
+                    {% endif %}
                 </div>
+                <span class="cat-stage-row__total">{{ c.total }}</span>
             </div>
             {% endfor %}
 
@@ -101,6 +104,7 @@
                     <span style="left:{{ (loop.index0 / (tick_count - 1)) * 100 }}%;">{{ t }}</span>
                     {% endfor %}
                 </div>
+                <div></div>
             </div>
         </div>
 
