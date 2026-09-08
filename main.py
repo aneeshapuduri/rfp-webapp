@@ -142,13 +142,21 @@ STATUS_LABELS = {
     "Clarifications Sent": "Awaiting Client Clarification",
     "Responses Pending": "Responses Pending",
     "Awaiting Assumptions Approval": "Review Assumptions",
-    "Awaiting Preview": "Review & Customize Proposal",
+    # Shown to everyone (dashboard/home list, the status pill on the project page) once Phase
+    # 3/4 finish — the project is simultaneously open for the preparer to edit (see the "Review &
+    # Customize Proposal" card, still keyed off this same status internally) and sitting with an
+    # admin for a Go/No-Go call. Named for the admin-facing half specifically since that's the
+    # action actually gating progress, and it's what the new /admin/approvals queue watches for.
+    "Awaiting Preview": "Awaiting Admin Decision",
     "Needs Revision": "Needs Revision",
     "Ready to Generate": "Ready for Review",
     "Submitted": "Submitted",
     "Declined": "Declined",
     "Cancelled": "Cancelled",
-    "No-Go": "No-Go",
+    # Underlying status value stays the literal "No-Go" string (zero migration risk — see the
+    # "Awaiting Preview" comment above for the same rationale); only the display label changes,
+    # to match the "Rejected" wording already used in the Summary tab's decision banner.
+    "No-Go": "Rejected",
 }
 
 # The order the pipeline actually moves projects through — drives the project-detail stepper.
@@ -167,6 +175,12 @@ STATUS_ORDER = [
 ]
 
 TERMINAL_BRANCH_STATUSES = {"Not a Bid Document", "Declined", "Cancelled", "No-Go"}
+
+# The one status the /admin/approvals queue watches for — a project sitting here has finished
+# Phase 3/4 and any assumptions gate, and has never had (or is having a fresh) Go/No-Go call made
+# on it. "Needs Revision" is deliberately excluded: that project is with the preparer, not the
+# admin, until they resubmit and land back here.
+APPROVAL_QUEUE_STATUS = "Awaiting Preview"
 
 # Synthetic multi-status groupings used only by the Home page's KPI tiles (a project's actual
 # `status` column is always one single value from STATUS_LABELS above — these keys never appear
@@ -197,12 +211,20 @@ def _enrich_project(p: dict) -> dict:
 
 def _ctx(request: Request, **extra) -> dict:
     """Common template context every page needs: who's logged in, the CSRF token for any
-    forms on the page, and whether DEMO_MODE is active (shown as a persistent banner so it's
-    never ambiguous whether output on screen is real)."""
+    forms on the page, whether DEMO_MODE is active (shown as a persistent banner so it's never
+    ambiguous whether output on screen is real), and — for an admin only — how many projects are
+    sitting in the approvals queue, so base.html can show a live count on the "Admin · Approvals"
+    nav link on every page, not just that page itself. The extra query only runs for an admin
+    (members never see that nav item), so this stays cheap for the common case."""
+    user = auth.current_user(request)
+    pending_approvals_count = (
+        db.count_pending_approvals(APPROVAL_QUEUE_STATUS) if user and user["role"] == "admin" else 0
+    )
     return {
-        "current_user": auth.current_user(request),
+        "current_user": user,
         "csrf_token": request.session.get("csrf_token", ""),
         "demo_mode": DEMO_MODE,
+        "pending_approvals_count": pending_approvals_count,
         **extra,
     }
 
@@ -639,6 +661,7 @@ def project_detail(request: Request, project_id: str):
         rfp_summary=rfp_summary,
         go_no_go_suggestion=go_no_go_suggestion,
         mandatory_match_summary=mandatory_match_summary,
+        status_labels=STATUS_LABELS,
         can_upload_responses=project["status"] in ("Clarifications Sent", "Responses Pending"),
     ))
 
@@ -870,9 +893,33 @@ async def record_go_no_go_decision(
         fields["status"] = "No-Go"
     elif decision == "Needs Confirmation":
         fields["status"] = "Needs Revision"
+        # Clear any acknowledgment left over from an earlier revision round on this same
+        # project, so the preparer has to explicitly acknowledge THIS comment before the
+        # editable proposal form reappears (see acknowledge_revision below).
+        fields["revision_acknowledged_by"] = None
+        fields["revision_acknowledged_at"] = None
     db.update_project(project_id, **fields)
     db.log_action("go_no_go_decided", project_id, {"decision": decision, "has_comment": bool(comment)},
                   user_identity=user["username"])
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+@app.post("/projects/{project_id}/acknowledge-revision")
+def acknowledge_revision(request: Request, project_id: str, _: None = Depends(auth.verify_csrf)):
+    """The preparer's explicit "I've read the admin's comment" step for a "Needs Revision"
+    project. Until this is recorded, project_detail.html shows only the admin's comment and this
+    button in the "Review & Customize Proposal" card — not the editable form itself — so the
+    preparer can't start changing things without having consciously seen what to change first.
+    Once acknowledged, the same status keeps showing the full editable form (see the "Needs
+    Revision" branch there) for as long as the project stays in this status; a fresh
+    "Needs Confirmation" decision later resets this (see record_go_no_go_decision above)."""
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if project["status"] != "Needs Revision":
+        raise HTTPException(400, "This project isn't waiting on a revision.")
+    if not project.get("revision_acknowledged_at"):
+        db.update_project(project_id, revision_acknowledged_by=user["username"], revision_acknowledged_at=db.now())
+        db.log_action("revision_acknowledged", project_id, user_identity=user["username"])
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
@@ -1317,6 +1364,8 @@ async def resubmit_preview(
         go_no_go_decided_by=None,
         go_no_go_decided_at=None,
         go_no_go_comment=None,
+        revision_acknowledged_by=None,
+        revision_acknowledged_at=None,
     )
     db.log_action("preview_resubmitted", project_id, {}, user_identity=user["username"])
     compute_go_no_go_suggestion_for_project(project_id)
@@ -1441,6 +1490,36 @@ def admin_activate_user(request: Request, user_id: str, _: None = Depends(auth.v
     db.set_user_active(user_id, True)
     db.log_action("user_activated", detail={"target_username": target["username"]}, user_identity=admin_user["username"])
     return RedirectResponse("/admin/users", status_code=303)
+
+
+# ---------- Admin: approvals queue ----------
+# Everything under /admin/* is already gated to the 'admin' role by AuthGateMiddleware (see
+# auth.py) — no per-route check needed here, same as the user-management routes above.
+
+@app.get("/admin/approvals", response_class=HTMLResponse)
+def admin_approvals(request: Request):
+    """Every project currently sitting at APPROVAL_QUEUE_STATUS ("Awaiting Admin Decision") that
+    hasn't already had a decision recorded — a focused queue for an admin to work through,
+    separate from the full Projects list (which still shows these same projects too, just mixed
+    in with every other status). Being at APPROVAL_QUEUE_STATUS isn't enough on its own: a
+    project there with go_no_go_decision already set to "Go" has already been decided and is now
+    waiting on the preparer to generate the document, not on an admin, so it's excluded here (see
+    db.count_pending_approvals for the same rule applied to the sidebar badge) — it reappears
+    automatically if resubmitted for a fresh decision, since that clears go_no_go_decision back to
+    null. Uses db.list_projects() directly rather than list_projects_for_user(): this page is
+    admin-only, and admins already have unrestricted access to every project, so there's no
+    per-user filtering to do here."""
+    projects = [
+        _enrich_project(p) for p in db.list_projects()
+        if p["status"] == APPROVAL_QUEUE_STATUS and not p.get("go_no_go_decision")
+    ]
+    # Oldest-waiting first — the natural triage order for a queue like this.
+    projects.sort(key=lambda p: p.get("updated_at") or "")
+    for p in projects:
+        p["go_no_go_suggestion"] = (
+            json.loads(p["go_no_go_suggestion_json"]) if p.get("go_no_go_suggestion_json") else None
+        )
+    return templates.TemplateResponse(request, "admin_approvals.html", _ctx(request, projects=projects))
 
 
 # ---------- Admin: project categories ----------

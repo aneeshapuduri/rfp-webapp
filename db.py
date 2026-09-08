@@ -188,6 +188,15 @@ _MIGRATIONS = [
     # deliberately separate from (and later than) capability_fit_json, which is a cheap
     # deterministic keyword check run right after upload, before most of this exists yet.
     ("projects", "go_no_go_suggestion_json", "TEXT"),
+    # Tracks whether the preparer has explicitly acknowledged an admin's "Needs Confirmation"
+    # comment before being allowed to resume editing the proposal — see main.py's
+    # acknowledge_revision route. Null while status is "Needs Revision" and unacknowledged (the
+    # "Review & Customize Proposal" card shows only the comment + an "Acknowledge & Resume" button
+    # in that state); set once the preparer clicks through. Reset back to null every time a fresh
+    # "Needs Confirmation" decision is recorded (see record_go_no_go_decision), so a stale
+    # acknowledgment from a prior revision round never carries into a new one.
+    ("projects", "revision_acknowledged_by", "TEXT"),
+    ("projects", "revision_acknowledged_at", "TEXT"),
 ]
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
@@ -334,6 +343,22 @@ def list_projects(include_deleted: bool = False) -> list[dict]:
         ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def count_pending_approvals(status: str) -> int:
+    """Cheap count used for the sidebar's "Admin · Approvals" badge (main.py's _ctx) — only ever
+    queried for an admin, so this runs at most once per admin page view, not per request site-wide.
+    Matches the same "actually awaiting a decision" definition as main.py's admin_approvals route:
+    being at APPROVAL_QUEUE_STATUS isn't enough on its own — a project there with a Go decision
+    already recorded is waiting on the preparer to generate the document, not on an admin, so it
+    must NOT count here (or show up in the queue itself) until a fresh decision is needed again."""
+    conn = get_conn()
+    n = conn.execute(
+        "SELECT COUNT(*) AS n FROM projects WHERE status = ? AND go_no_go_decision IS NULL AND deleted_at IS NULL",
+        (status,),
+    ).fetchone()["n"]
+    conn.close()
+    return n
 
 
 def update_project(project_id: str, **fields):
