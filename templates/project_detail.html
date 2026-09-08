@@ -20,19 +20,27 @@
     {# Terminal/branch statuses each replace one step in the sequence above with a ✕ instead of
        progressing further — "Not a Bid Document" branches right after Analyzing, "Cancelled"
        branches at the assumptions decision, "No-Go" branches at the preview/summary review
-       step, "Declined" branches at the very end. #}
+       step, "Declined" branches at the very end. "Needs Revision" also replaces the preview
+       step, but it's NOT terminal — it's a loop back to the preparer, shown with a ↺ in amber
+       instead of a ✕ in red (see is-revision below), since the project returns to this same
+       step once resubmitted rather than stopping for good. #}
     {% set terminal_branch_index = {"Not a Bid Document": 0, "Cancelled": 3, "No-Go": 4, "Declined": 6} %}
+    {% set revision_branch_index = {"Needs Revision": 4} %}
     {% set is_terminal_branch = project.status in terminal_branch_index %}
-    {% set display_status = steps[terminal_branch_index[project.status]] if is_terminal_branch else project.status %}
+    {% set is_revision_branch = project.status in revision_branch_index %}
+    {% set is_branch = is_terminal_branch or is_revision_branch %}
+    {% set branch_index = terminal_branch_index[project.status] if is_terminal_branch else (revision_branch_index[project.status] if is_revision_branch else -1) %}
+    {% set display_status = steps[branch_index] if is_branch else project.status %}
     {% set ns = namespace(current_index=-1) %}
     {% for s in steps %}{% if s == display_status %}{% set ns.current_index = loop.index0 %}{% endif %}{% endfor %}
     <div class="stepper">
         {% for s in steps %}
-        {% set is_branch_step = is_terminal_branch and loop.index0 == ns.current_index %}
-        <div class="step {% if is_branch_step %}is-declined{% elif ns.current_index >= 0 and loop.index0 < ns.current_index %}is-done{% elif loop.index0 == ns.current_index %}is-current{% endif %}">
+        {% set is_branch_step = is_branch and loop.index0 == ns.current_index %}
+        <div class="step {% if is_branch_step and is_revision_branch %}is-revision{% elif is_branch_step %}is-declined{% elif ns.current_index >= 0 and loop.index0 < ns.current_index %}is-done{% elif loop.index0 == ns.current_index %}is-current{% endif %}">
             <div class="step__line"></div>
             <div class="step__dot">
-                {%- if is_branch_step %}✕
+                {%- if is_branch_step and is_revision_branch %}↺
+                {%- elif is_branch_step %}✕
                 {%- elif ns.current_index >= 0 and loop.index0 < ns.current_index %}✓
                 {%- else %}{{ loop.index }}
                 {%- endif %}
@@ -220,6 +228,15 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
         </span>
         <div class="status-panel__title" style="color:var(--danger);">No-Go — stopped at the final summary review, before generation. See the Summary &amp; Final Go/No-Go section below for who decided and when.</div>
+
+        {% elif project.status == "Needs Revision" %}
+        <span class="status-panel__icon status-panel__icon--waiting" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9"/></svg>
+        </span>
+        <div>
+            <div class="status-panel__title">Needs revision before it can move forward</div>
+            <div class="status-panel__text">An admin asked for changes before approving this bid — see the admin's comment in "Summary &amp; Final Go/No-Go" below, make the requested changes in "Review &amp; Customize Proposal," then resubmit for another review.</div>
+        </div>
         {% endif %}
     </div>
 </div>
@@ -390,7 +407,7 @@
 </div>
 {% endif %}
 
-{% if project.status in ("Awaiting Preview", "No-Go") and compliance_matrix %}
+{% if project.status in ("Awaiting Preview", "Needs Revision", "No-Go") and compliance_matrix %}
 <div class="card" aria-labelledby="summary-heading">
     <div class="card__head"><h2 id="summary-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg> Summary &amp; Final Go/No-Go</h2></div>
     <div class="card__body">
@@ -414,8 +431,34 @@
         <p class="coverage-note">No key dates were found in the uploaded document.</p>
         {% endif %}
 
+        {% set summary_categories = [
+            ("vendor_info", "Vendor / Bidder Information"),
+            ("bidder_qualifications", "Bidder Qualifications"),
+            ("cost_proposal", "Cost Proposal"),
+            ("key_events", "Key Events"),
+            ("evaluation_process", "Evaluation Process"),
+            ("submission_requirements", "Proposal Submission Requirements"),
+            ("other_requirements", "Other Proposal Requirements"),
+            ("contract_terms", "Contract Terms & Conditions"),
+        ] %}
+        {% if rfp_summary and rfp_summary.values() | select | list %}
+        <div class="capability-ref__label" style="margin-bottom:8px;">RFP Summary</div>
+        <div class="summary-categories">
+            {% for field, label in summary_categories %}
+            {% if rfp_summary.get(field) %}
+            <div class="summary-category">
+                <div class="summary-category__label">{{ label }}</div>
+                <div class="summary-category__text">{{ rfp_summary[field] }}</div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="coverage-note">No additional RFP summary details (bidder qualifications, cost proposal, evaluation process, contract terms, etc.) were found in the uploaded document.</p>
+        {% endif %}
+
         {% if mandatory_match_summary %}
-        <div class="capability-ref__label" style="margin-bottom:8px;">Mandatory Requirements — Matched vs. Vendor Capabilities</div>
+        <div class="capability-ref__label" style="margin-bottom:8px; margin-top:20px;">Mandatory Requirements — Matched vs. Vendor Capabilities</div>
         <p class="coverage-note" style="margin-top:0;">{{ mandatory_match_summary.matched }} of {{ mandatory_match_summary.total }} requirements fully matched ({{ mandatory_match_summary.not_matched }} not matched or only partially matched — see the full Compliance Matrix further down this page for detail on each one).</p>
         <table class="requirements-table" style="margin-bottom:20px;">
             <thead><tr><th scope="col">Requirement</th><th scope="col">Match</th></tr></thead>
@@ -433,38 +476,83 @@
         </table>
         {% endif %}
 
+        <div class="capability-ref__label" style="margin-bottom:8px;">Agent Suggestion</div>
+        {% if go_no_go_suggestion %}
+        {% set sugg_class = "rec-go" if go_no_go_suggestion.overall == "Go" else ("rec-no-go" if go_no_go_suggestion.overall == "No-Go" else "rec-go-with-gaps") %}
+        <div class="recommendation-banner {{ sugg_class }}">
+            <div class="recommendation-banner__icon">
+                {% if go_no_go_suggestion.overall == "Go" %}
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                {% elif go_no_go_suggestion.overall == "No-Go" %}
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                {% else %}
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                {% endif %}
+            </div>
+            <div>
+                <div class="recommendation-banner__title">{{ go_no_go_suggestion.overall }}</div>
+                <div class="recommendation-banner__text">{{ go_no_go_suggestion.reasoning }}</div>
+                {% if go_no_go_suggestion.key_considerations %}
+                <ul style="margin:8px 0 0 18px; padding:0; font-size:.85rem; color:var(--ink); line-height:1.5;">
+                    {% for c in go_no_go_suggestion.key_considerations %}
+                    <li>{{ c }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+            </div>
+        </div>
+        {% else %}
+        <p class="coverage-note" style="margin-top:0;">No AI suggestion is available for this project (no AI provider is configured, or the check hasn't run yet).</p>
+        {% endif %}
+
         {% if project.status == "No-Go" %}
         <div class="recommendation-banner rec-no-go">
             <div class="recommendation-banner__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div>
             <div>
-                <div class="recommendation-banner__title">No-Go{% if project.go_no_go_decided_by %} — decided by {{ project.go_no_go_decided_by }}{% endif %}{% if project.go_no_go_decided_at %} on {{ project.go_no_go_decided_at[:10] }}{% endif %}</div>
-                <div class="recommendation-banner__text">This project was stopped at the final summary review and will not be generated or submitted.</div>
+                <div class="recommendation-banner__title">Rejected{% if project.go_no_go_decided_by %} — decided by {{ project.go_no_go_decided_by }}{% endif %}{% if project.go_no_go_decided_at %} on {{ project.go_no_go_decided_at[:10] }}{% endif %}</div>
+                <div class="recommendation-banner__text">This project was stopped at the final summary review and will not be generated or submitted.{% if project.go_no_go_comment %} Admin's comment: {{ project.go_no_go_comment }}{% endif %}</div>
+            </div>
+        </div>
+        {% elif project.status == "Needs Revision" %}
+        <div class="recommendation-banner rec-warning">
+            <div class="recommendation-banner__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+            <div>
+                <div class="recommendation-banner__title">Needs Confirmation{% if project.go_no_go_decided_by %} — {{ project.go_no_go_decided_by }}{% endif %}{% if project.go_no_go_decided_at %} on {{ project.go_no_go_decided_at[:10] }}{% endif %}</div>
+                <div class="recommendation-banner__text"><strong>Admin's comment:</strong> {{ project.go_no_go_comment }}</div>
+                <div class="recommendation-banner__text" style="margin-top:6px;">Make the requested changes in "Review &amp; Customize Proposal" below, then resubmit for another review.</div>
             </div>
         </div>
         {% elif project.go_no_go_decision == "Go" %}
         <div class="recommendation-banner rec-go">
             <div class="recommendation-banner__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
             <div>
-                <div class="recommendation-banner__title">Go{% if project.go_no_go_decided_by %} — decided by {{ project.go_no_go_decided_by }}{% endif %}{% if project.go_no_go_decided_at %} on {{ project.go_no_go_decided_at[:10] }}{% endif %}</div>
-                <div class="recommendation-banner__text">Final bid generation is unlocked below.</div>
+                <div class="recommendation-banner__title">Approved{% if project.go_no_go_decided_by %} — decided by {{ project.go_no_go_decided_by }}{% endif %}{% if project.go_no_go_decided_at %} on {{ project.go_no_go_decided_at[:10] }}{% endif %}</div>
+                <div class="recommendation-banner__text">Final bid generation is unlocked below.{% if project.go_no_go_comment %} Admin's comment: {{ project.go_no_go_comment }}{% endif %}</div>
             </div>
         </div>
         {% elif current_user.role == "admin" %}
-        <p class="coverage-note" style="margin-top:0;">Review the requirement matches and key dates above, then record a final decision. Generating the final bid is blocked below until this is set to Go.</p>
-        <div class="decision-actions">
-            <form action="/projects/{{ project.id }}/go-no-go" method="post" class="inline-form"
-                  onsubmit="return confirm('Record Go? This unlocks final bid generation below.');">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="decision" value="Go">
-                <button type="submit" class="btn-primary btn-approve">Go — Unlock Generation</button>
-            </form>
-            <form action="/projects/{{ project.id }}/go-no-go" method="post" class="inline-form"
-                  onsubmit="return confirm('Record No-Go? This stops the project here — it cannot be generated or submitted afterward.');">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="decision" value="No-Go">
-                <button type="submit" class="btn-danger">No-Go — Stop Here</button>
-            </form>
-        </div>
+        <p class="coverage-note" style="margin-top:0;">Review the requirement matches, RFP summary, and Agent Suggestion above, then record a final decision. Generating the final bid is blocked below until this is set to Approved. Choosing "Need Confirmation" sends this back to the preparer with your comment so they can make changes and resubmit.</p>
+        <form action="/projects/{{ project.id }}/go-no-go" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="form-field">
+                <label for="go_no_go_comment">Comment (required for "Need Confirmation"; optional otherwise)</label>
+                <textarea id="go_no_go_comment" name="comment" rows="3" style="width:100%;" placeholder="Explain what needs to change, or add context for your decision"></textarea>
+            </div>
+            <div class="decision-actions">
+                <button type="submit" name="decision" value="Go" class="btn-primary btn-approve"
+                        onclick="return confirm('Approve? This unlocks final bid generation below.');">
+                    Approve &amp; Unlock Generation
+                </button>
+                <button type="submit" name="decision" value="Needs Confirmation" class="btn-warning"
+                        onclick="var c = document.getElementById('go_no_go_comment'); if (!c.value.trim()) { alert('Add a comment explaining what needs to change before sending this back.'); return false; } return confirm('Send this back to the preparer for revision with your comment?');">
+                    Need Confirmation
+                </button>
+                <button type="submit" name="decision" value="No-Go" class="btn-danger"
+                        onclick="return confirm('Reject this project? It cannot be generated or submitted afterward.');">
+                    Reject
+                </button>
+            </div>
+        </form>
         {% else %}
         <p class="coverage-note" style="margin-top:0;">Awaiting a Go/No-Go decision from an admin before this bid can be generated.</p>
         {% endif %}
@@ -472,10 +560,16 @@
 </div>
 {% endif %}
 
-{% if project.status == "Awaiting Preview" and preview_content %}
+{% if project.status in ("Awaiting Preview", "Needs Revision") and preview_content %}
 <div class="card" aria-labelledby="preview-heading">
     <div class="card__head"><h2 id="preview-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg> Review &amp; Customize Proposal</h2></div>
     <div class="card__body">
+        {% if project.status == "Needs Revision" %}
+        <div class="alert alert-error" style="margin-bottom:16px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <div><strong>An admin sent this back for changes:</strong> {{ project.go_no_go_comment }}</div>
+        </div>
+        {% endif %}
         <form action="/projects/{{ project.id }}/preview/generate" method="post" enctype="multipart/form-data" class="upload-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
@@ -650,11 +744,15 @@
                 <p class="coverage-note">If you upload an edited document here, it's used as the final bid exactly as-is — the template choice and edits above are ignored for this submission.</p>
             </div>
 
-            {% if project.go_no_go_decision == "Go" %}
+            {% if project.status == "Needs Revision" %}
+            <button type="submit" formaction="/projects/{{ project.id }}/preview/resubmit" formnovalidate class="btn-primary"
+                    onclick="return confirm('Resubmit these changes for another admin review?');">Resubmit for Admin Review</button>
+            <p class="coverage-note" style="margin-top:8px;">This sends the changes above back to an admin for a fresh decision — it doesn't build the final document. Once approved, come back here to generate the final bid.</p>
+            {% elif project.go_no_go_decision == "Go" %}
             <button type="submit" class="btn-primary" onclick="return confirm('Generate the final bid? If you uploaded an edited document above, that will be used as-is; otherwise the final document is built from the edits on this page.');">Generate Final Bid</button>
             {% else %}
-            <button type="submit" class="btn-primary" disabled title="Blocked until an admin records a Go decision in the Summary &amp; Final Go/No-Go section above">Generate Final Bid</button>
-            <p class="coverage-note" style="margin-top:8px;">Blocked until an admin records a <strong>Go</strong> decision in the "Summary &amp; Final Go/No-Go" section above.</p>
+            <button type="submit" class="btn-primary" disabled title="Blocked until an admin records an Approved decision in the Summary &amp; Final Go/No-Go section above">Generate Final Bid</button>
+            <p class="coverage-note" style="margin-top:8px;">Blocked until an admin records an <strong>Approved</strong> decision in the "Summary &amp; Final Go/No-Go" section above.</p>
             {% endif %}
         </form>
     </div>
