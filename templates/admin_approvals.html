@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% from "_macros.html" import search_box %}
+{% block title %}Approvals — RFP Proposal Agent{% endblock %}
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>Approvals</h1>
+        <p>Every project waiting on a Go/No-Go decision — the same queue this app now calls
+           "Awaiting Admin Decision" everywhere else. Open one to review its Summary tab and
+           record Approve, Reject, or Need Confirmation.</p>
+    </div>
+</div>
+
+<div class="card">
+{% if projects %}
+    <div style="padding:16px 22px 0;">
+        {{ search_box("approvals-search", "table.approvals-table tbody tr", "Search by project name or category…", empty_id="approvals-search-empty") }}
+    </div>
+    <div class="table-scroll">
+    <table class="approvals-table table-fit" role="table">
+        <caption class="visually-hidden">Projects awaiting an admin Go/No-Go decision</caption>
+        <colgroup>
+            <col style="width:28%;"><col style="width:16%;"><col style="width:20%;"><col style="width:16%;"><col style="width:20%;">
+        </colgroup>
+        <thead>
+            <tr>
+                <th scope="col">Project</th>
+                <th scope="col">Category</th>
+                <th scope="col">Agent Suggestion</th>
+                <th scope="col">Awaiting Since</th>
+                <th scope="col"></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in projects %}
+            <tr class="clickable-row">
+                <td class="cell-truncate"><a href="/projects/{{ p.id }}#summary-heading" title="{{ p.name }}">{{ p.name }}</a></td>
+                <td>{% if p.category %}<span class="cap-chip">{{ p.category }}</span>{% else %}<span class="cell-muted">—</span>{% endif %}</td>
+                <td>
+                    {% if p.go_no_go_suggestion %}
+                    {% set s = p.go_no_go_suggestion.overall %}
+                    <span class="status-pill {{ 'status-submitted' if s == 'Go' else ('status-declined' if s == 'No-Go' else 'status-clarifications-sent') }}" title="{{ p.go_no_go_suggestion.reasoning }}">{{ s }}</span>
+                    {% else %}
+                    <span class="cell-muted">Not available</span>
+                    {% endif %}
+                </td>
+                <td class="cell-muted" style="white-space:nowrap;" title="{{ p.updated_at[:10] }}">{{ p.updated_at[:10] }}</td>
+                <td style="text-align:right;"><a href="/projects/{{ p.id }}#summary-heading" class="btn-ghost btn-small">Review &amp; Decide</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <p id="approvals-search-empty" class="search-empty-note" hidden>No pending approvals match your search.</p>
+{% else %}
+    <div class="empty-state">
+        <div class="empty-state__icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+        <p>Nothing waiting on a decision right now.</p>
+    </div>
+{% endif %}
+</div>
+{% endblock %}
