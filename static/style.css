@@ -288,6 +288,10 @@ tr.clickable-row:hover td:first-child a { color: var(--accent); }
 /* Declined and Cancelled are both terminal "did not proceed" outcomes; Not a Bid Document is
    a stopped/needs-attention state (re-upload required) — all three read as red. */
 .status-declined, .status-cancelled, .status-not-a-bid-document, .status-no-go { background: var(--danger-bg); color: var(--danger); }
+/* Needs Revision is a loop-back, not a stop — it reads as the same "waiting" orange used for
+   Clarifications Sent/Responses Pending above, not the purple "paused to decide" family or the
+   red terminal family. */
+.status-needs-revision { background: var(--warning-bg); color: var(--warning); }
 .pulse-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.6s ease-in-out infinite; display: inline-block; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -316,6 +320,13 @@ tr.clickable-row:hover td:first-child a { color: var(--accent); }
 .step.is-declined .step__dot { background: var(--danger); color: #fff; }
 .step.is-declined .step__label { color: var(--danger); font-weight: 700; }
 
+/* Needs Revision: a loop-back branch, not a dead stop — amber with a ↺ glyph instead of the red
+   ✕ used by the terminal branches above, so it visually reads as "comes back around" rather than
+   "stopped for good." */
+.step.is-revision .step__line { background: var(--success); }
+.step.is-revision .step__dot { background: var(--warning); color: #fff; }
+.step.is-revision .step__label { color: var(--warning); font-weight: 700; }
+
 .req-badge { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: .83rem; }
 .req-badge.clear { color: var(--success); }
 .req-badge.ambiguous { color: var(--danger); }
@@ -337,6 +348,8 @@ tr.clickable-row:hover td:first-child a { color: var(--accent); }
 .btn-primary:active { transform: translateY(0); }
 .btn-danger { background: #fff; color: var(--danger); border-color: #F0C9C4; }
 .btn-danger:hover { background: var(--danger-bg); text-decoration: none; border-color: var(--danger); }
+.btn-warning { background: #fff; color: var(--warning); border-color: #F3DBAE; display: inline-flex; align-items: center; gap: 8px; font-family: inherit; font-size: .9rem; font-weight: 600; padding: 10px 18px; border-radius: var(--radius-sm); cursor: pointer; transition: background .18s var(--ease), border-color .18s var(--ease); }
+.btn-warning:hover { background: var(--warning-bg); text-decoration: none; border-color: var(--warning); }
 .btn-ghost { background: none; color: var(--ink-soft); border-color: var(--border); }
 .btn-ghost:hover { background: #F5F6FA; text-decoration: none; border-color: #C9D0DE; }
 .btn-small { padding: 6px 13px; font-size: .8rem; }
@@ -486,6 +499,10 @@ select.text-input, select {
 .recommendation-banner.rec-go { background: var(--success-bg); border-color: #C9EAD3; }
 .recommendation-banner.rec-go-with-gaps { background: var(--warning-bg); border-color: #F3DBAE; }
 .recommendation-banner.rec-no-go { background: var(--danger-bg); border-color: #F0C9C4; }
+/* Generic amber variant, distinct from rec-go-with-gaps (an AI-suggestion outcome) even though
+   it shares the same colors — used for the human "Needs Confirmation" decision banner so the
+   class name reads correctly regardless of which one triggered it. */
+.recommendation-banner.rec-warning { background: var(--warning-bg); border-color: #F3DBAE; }
 .recommendation-banner__icon {
   flex-shrink: 0; width: 38px; height: 38px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,.65);
@@ -493,11 +510,19 @@ select.text-input, select {
 .rec-go .recommendation-banner__icon { color: var(--success); }
 .rec-go-with-gaps .recommendation-banner__icon { color: var(--warning); }
 .rec-no-go .recommendation-banner__icon { color: var(--danger); }
+.rec-warning .recommendation-banner__icon { color: var(--warning); }
 .recommendation-banner__title { font-weight: 700; font-size: .92rem; margin-bottom: 3px; }
 .rec-go .recommendation-banner__title { color: var(--success); }
 .rec-go-with-gaps .recommendation-banner__title { color: var(--warning); }
 .rec-no-go .recommendation-banner__title { color: var(--danger); }
+.rec-warning .recommendation-banner__title { color: var(--warning); }
 .recommendation-banner__text { font-size: .85rem; color: var(--ink); line-height: 1.5; }
+
+/* ---------- RFP Summary categories (Go/No-Go Summary tab) ---------- */
+.summary-categories { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin-bottom: 8px; }
+.summary-category { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+.summary-category__label { font-size: .78rem; font-weight: 700; color: var(--ink-soft); margin-bottom: 6px; }
+.summary-category__text { font-size: .85rem; color: var(--ink); line-height: 1.5; white-space: pre-line; }
 
 .fit-list { list-style: none; margin: 0 0 4px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .fit-row { display: flex; gap: 13px; padding: 14px 16px; align-items: flex-start; border-bottom: 1px solid var(--border); }
