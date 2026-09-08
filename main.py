@@ -34,7 +34,16 @@ Routes:
                                             review or edit it directly in Word before finalizing
   POST /projects/{id}/preview/generate    submit the edited preview + template choice (or an
                                            edited document downloaded above and re-uploaded),
-                                           builds/stores the final docx
+                                           builds/stores the final docx — only valid from
+                                           'Awaiting Preview' with a go_no_go_decision of 'Go'
+  POST /projects/{id}/go-no-go        admin records Approve ('Go') / Reject ('No-Go') / Need
+                                       Confirmation on the Summary tab — only valid from
+                                       'Awaiting Preview'; Need Confirmation requires a comment
+                                       and moves the project to 'Needs Revision'
+  POST /projects/{id}/preview/resubmit    preparer resubmits an edited preview from 'Needs
+                                           Revision' for a fresh admin decision — persists the
+                                           edits and returns to 'Awaiting Preview', clearing the
+                                           previous decision/comment
   POST /projects/{id}/approve         mark Submitted — only valid from 'Ready to Generate'
   POST /projects/{id}/reject          mark Declined — only valid from 'Ready to Generate'
   POST /projects/{id}/delete          soft-delete a project
@@ -71,6 +80,7 @@ from pipeline_runner import (
     DEMO_MODE,
     build_preview_document_bytes,
     check_document_validity,
+    compute_go_no_go_suggestion_for_project,
     extract_client_responses,
     finalize_proposal,
     process_manual_responses,
@@ -133,6 +143,7 @@ STATUS_LABELS = {
     "Responses Pending": "Responses Pending",
     "Awaiting Assumptions Approval": "Review Assumptions",
     "Awaiting Preview": "Review & Customize Proposal",
+    "Needs Revision": "Needs Revision",
     "Ready to Generate": "Ready for Review",
     "Submitted": "Submitted",
     "Declined": "Declined",
@@ -169,7 +180,7 @@ STATUS_GROUPS = {
     },
     "__in_review__": {
         "label": "In Review",
-        "statuses": ["Analyzing", "Awaiting Assumptions Approval", "Awaiting Preview", "Ready to Generate"],
+        "statuses": ["Analyzing", "Awaiting Assumptions Approval", "Awaiting Preview", "Needs Revision", "Ready to Generate"],
     },
 }
 
@@ -576,7 +587,7 @@ def project_detail(request: Request, project_id: str):
         content = json.loads(project["phase4_content_json"])
         compliance_matrix = content.get("compliance_matrix", [])
         pricing = content.get("pricing")
-        if project["status"] == "Awaiting Preview":
+        if project["status"] in ("Awaiting Preview", "Needs Revision"):
             preview_content = content
 
     rfp_structure = None
@@ -588,6 +599,10 @@ def project_detail(request: Request, project_id: str):
         rate_research_by_role = json.loads(project["rate_research_json"]).get("per_role", {})
 
     key_dates = json.loads(project["key_dates_json"]) if project.get("key_dates_json") else None
+    rfp_summary = json.loads(project["rfp_summary_json"]) if project.get("rfp_summary_json") else None
+    go_no_go_suggestion = (
+        json.loads(project["go_no_go_suggestion_json"]) if project.get("go_no_go_suggestion_json") else None
+    )
 
     # A simple binary read on top of the existing (3-tier) compliance matrix for the Go/No-Go
     # summary — "Full Compliance" counts as Matched, anything else (Partial Compliance, Does Not
@@ -621,6 +636,8 @@ def project_detail(request: Request, project_id: str):
         rfp_structure=rfp_structure,
         rate_research_by_role=rate_research_by_role,
         key_dates=key_dates,
+        rfp_summary=rfp_summary,
+        go_no_go_suggestion=go_no_go_suggestion,
         mandatory_match_summary=mandatory_match_summary,
         can_upload_responses=project["status"] in ("Clarifications Sent", "Responses Pending"),
     ))
@@ -819,9 +836,13 @@ async def record_go_no_go_decision(
     action alongside the rest of this file's project routes, not an admin console page), so
     unlike an /admin/* route it needs its own explicit admin check here rather than relying on
     AuthGateMiddleware. "Go" unlocks final-bid generation (see generate_final_proposal's check
-    above); "No-Go" moves the project to a new terminal status distinct from Cancelled (an
+    above); "No-Go" (Reject) moves the project to a terminal status distinct from Cancelled (an
     assumptions-stage rejection) and Declined (a completed proposal that was turned down) —
-    ineligibility discovered at this later, more-informed review gate is its own kind of stop."""
+    ineligibility discovered at this later, more-informed review gate is its own kind of stop.
+    "Needs Confirmation" is a third, non-terminal outcome: it sends the project back to the
+    preparer (status "Needs Revision") with the admin's comment so they can revise the proposal
+    on the same editable-preview screen and resubmit for another decision (see the new
+    preview/resubmit route below) — 'Go' and 'No-Go' both stay one-shot decisions."""
     user = auth.current_user(request)
     project = _get_project_or_403(project_id, user)
     if user["role"] != "admin":
@@ -831,18 +852,27 @@ async def record_go_no_go_decision(
 
     form = await request.form()
     decision = str(form.get("decision", ""))
-    if decision not in ("Go", "No-Go"):
-        raise HTTPException(400, "Invalid decision — must be 'Go' or 'No-Go'.")
+    if decision not in ("Go", "No-Go", "Needs Confirmation"):
+        raise HTTPException(400, "Invalid decision — must be 'Go', 'No-Go', or 'Needs Confirmation'.")
+
+    comment = str(form.get("comment", "")).strip() or None
+    if decision == "Needs Confirmation" and not comment:
+        raise HTTPException(400, "A comment is required when choosing 'Needs Confirmation' — the "
+                                  "preparer needs to know what to change.")
 
     fields = {
         "go_no_go_decision": decision,
         "go_no_go_decided_by": user["username"],
         "go_no_go_decided_at": db.now(),
+        "go_no_go_comment": comment,
     }
     if decision == "No-Go":
         fields["status"] = "No-Go"
+    elif decision == "Needs Confirmation":
+        fields["status"] = "Needs Revision"
     db.update_project(project_id, **fields)
-    db.log_action("go_no_go_decided", project_id, {"decision": decision}, user_identity=user["username"])
+    db.log_action("go_no_go_decided", project_id, {"decision": decision, "has_comment": bool(comment)},
+                  user_identity=user["username"])
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
@@ -966,6 +996,13 @@ async def accept_assumptions(request: Request, project_id: str, _: None = Depend
     db.log_action(
         "assumptions_accepted", project_id, {"edited_count": edited_count}, user_identity=user["username"]
     )
+    # This is the first moment the project is actually on the Summary tab when there WERE
+    # assumption items to accept (see pipeline_runner.py's _run_phase3_and_4, which computes this
+    # immediately instead when there are none) — compute the fresh Go/No-Go suggestion now that
+    # the (possibly edited) assumptions are final. Synchronous rather than a background task: it's
+    # a single fast classification call, and doing it inline means the Summary tab already has a
+    # suggestion the moment this redirect lands, with no extra polling/reload plumbing needed.
+    compute_go_no_go_suggestion_for_project(project_id)
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
@@ -1119,7 +1156,7 @@ async def download_preview_document(
     upload the edited copy there (as "final_document") to use it as the final bid directly."""
     user = auth.current_user(request)
     project = _get_project_or_403(project_id, user)
-    if project["status"] != "Awaiting Preview":
+    if project["status"] not in ("Awaiting Preview", "Needs Revision"):
         raise HTTPException(400, "This project isn't at the preview/customize step.")
     if not project.get("phase4_content_json"):
         raise HTTPException(400, "No generated content found to preview.")
@@ -1245,6 +1282,46 @@ async def generate_final_proposal(
     # happened — status stays "Awaiting Preview" for the whole background build, so without this
     # the page would look unchanged until the user manually refreshes.
     return RedirectResponse(f"/projects/{project_id}?generating=1", status_code=303)
+
+
+@app.post("/projects/{project_id}/preview/resubmit")
+async def resubmit_preview(
+    request: Request,
+    project_id: str,
+    _: None = Depends(auth.verify_csrf),
+):
+    """The other side of a "Needs Confirmation" decision (see record_go_no_go_decision above):
+    the preparer has revised the proposal on the same editable-preview screen the "Needs
+    Revision" status keeps rendered, and is resubmitting it for a fresh admin decision. Unlike
+    generate_final_proposal, no document is built here — the edited content is persisted straight
+    to phase4_content_json (via the same _reassemble_preview_content helper both routes share) and
+    the project goes back to "Awaiting Preview" for another look at the Summary tab. The previous
+    decision, its comment, and who/when it was made are all cleared so nothing stale carries into
+    the fresh review, and a new Go/No-Go suggestion is computed synchronously (same rationale as
+    accept_assumptions above) so the Summary tab already reflects the just-edited content."""
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if project["status"] != "Needs Revision":
+        raise HTTPException(400, "This project isn't waiting on a revision.")
+    if not project.get("phase4_content_json"):
+        raise HTTPException(400, "No generated content found to resubmit.")
+
+    form = await request.form()
+    content = _reassemble_preview_content(project, form)
+
+    db.update_project(
+        project_id,
+        status="Awaiting Preview",
+        phase4_content_json=json.dumps(content),
+        go_no_go_decision=None,
+        go_no_go_decided_by=None,
+        go_no_go_decided_at=None,
+        go_no_go_comment=None,
+    )
+    db.log_action("preview_resubmitted", project_id, {}, user_identity=user["username"])
+    compute_go_no_go_suggestion_for_project(project_id)
+
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
 @app.post("/projects/{project_id}/delete")

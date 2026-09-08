@@ -47,6 +47,7 @@ VALID_STATUSES = [
     "Responses Pending",
     "Awaiting Assumptions Approval",
     "Awaiting Preview",
+    "Needs Revision",
     "Ready to Generate",
     "Submitted",
     "Declined",
@@ -165,6 +166,28 @@ _MIGRATIONS = [
     ("projects", "go_no_go_decision", "TEXT"),
     ("projects", "go_no_go_decided_by", "TEXT"),
     ("projects", "go_no_go_decided_at", "TEXT"),
+    # An admin's free-text note attached to the most recent Go/No-Go/Needs-Confirmation decision
+    # on the Summary tab. Always optional except when go_no_go_decision is "Needs Confirmation",
+    # where main.py requires non-empty text — that's the message the preparer sees explaining
+    # what to change. Cleared whenever the project is resubmitted for a fresh decision (see
+    # POST /projects/{id}/preview/resubmit) so a stale comment never lingers past the revision it
+    # was about.
+    ("projects", "go_no_go_comment", "TEXT"),
+    # Richer categorized read of the uploaded RFP beyond the flat requirements list and key
+    # dates — bidder/vendor info, bidder qualifications, cost proposal instructions, key events,
+    # evaluation process, submission requirements, other proposal requirements, and contract
+    # terms & conditions. Extracted once at upload time (see pipeline/rfp_summary_extractor.py),
+    # non-fatal on failure, surfaced on the Summary tab. Each value is free text (a short summary
+    # or bullet list), not further structured — RFPs describe these too inconsistently to parse
+    # into anything stricter.
+    ("projects", "rfp_summary_json", "TEXT"),
+    # A fresh, LLM-generated Go/No-Go recommendation computed once the project actually reaches
+    # the Summary/Go-No-Go review step (after Phase 3/4 and, if applicable, assumptions
+    # acceptance) — informed by the categorized RFP summary above, the compliance matrix, and the
+    # early capability-fit check, so it reflects everything known by decision time. This is
+    # deliberately separate from (and later than) capability_fit_json, which is a cheap
+    # deterministic keyword check run right after upload, before most of this exists yet.
+    ("projects", "go_no_go_suggestion_json", "TEXT"),
 ]
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None

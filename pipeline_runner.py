@@ -31,6 +31,7 @@ from pipeline.clarification_doc_builder import build_clarification_doc
 from pipeline.document_builder import build_final_proposal
 from pipeline.document_validity import DocumentValidityResult, classify_document_validity
 from pipeline.go_no_go import assess_capability_fit
+from pipeline.go_no_go_suggestion import compute_go_no_go_suggestion
 from pipeline.key_dates_extractor import extract_key_dates
 from pipeline.phase1_pipeline import guess_agency, guess_project_title, run_phase1
 from pipeline.phase2_pipeline import resolve_with_responses
@@ -40,6 +41,7 @@ from pipeline.pricing_engine import build_pricing_summary
 from pipeline.response_reader import normalize_q_num, read_answer_rows
 from pipeline.response_structure_detector import detect_response_structure
 from pipeline.rfp_reader import read_rfp
+from pipeline.rfp_summary_extractor import extract_rfp_summary
 from pipeline.schema import Phase1Result
 from pipeline.template_mapper import extract_template_headings, map_sections_to_template
 
@@ -167,15 +169,25 @@ def process_new_upload(project_id: str, content: bytes, extension: str, skip_val
         # Bid-document validity gate: runs before any requirement extraction. Only checked when
         # a real LLM client is configured — DEMO_MODE's bundled sample RFPs are known-good and
         # skip straight to the existing demo-case branch below, exactly as before this gate
-        # existed.
-        if client is not None and not skip_validity_check:
-            validity = classify_document_validity(rfp_text, client)
-            db.log_action("document_validity_checked", project_id, validity.to_dict())
-            if not validity.is_bid_document:
-                _record_invalid_document(project_id, validity)
-                return
+        # existed. `skip_validity_check` only skips the (redundant) validity call itself — the
+        # structure/key-dates/RFP-summary checks below it must still run every time a real
+        # client is configured, whether or not this particular call already validated the
+        # document. (Previously these three were nested *inside* the `not skip_validity_check`
+        # branch, so the normal create_project path — which validates synchronously before this
+        # function ever runs and always passes skip_validity_check=True — silently never
+        # populated rfp_structure_json or key_dates_json at all. Only the reupload path, which
+        # leaves skip_validity_check False, ever exercised them. Fixed here so every real upload
+        # gets these checks, not just re-uploads.)
+        if client is not None:
+            if not skip_validity_check:
+                validity = classify_document_validity(rfp_text, client)
+                db.log_action("document_validity_checked", project_id, validity.to_dict())
+                if not validity.is_bid_document:
+                    _record_invalid_document(project_id, validity)
+                    return
             _detect_rfp_structure(project_id, rfp_text, client)
             _extract_key_dates(project_id, rfp_text, client)
+            _extract_rfp_summary(project_id, rfp_text, client)
 
         if client is None and DEMO_MODE:
             case = _detect_demo_case(rfp_text)
@@ -256,6 +268,62 @@ def _extract_key_dates(project_id: str, rfp_text: str, client: ClaudeClient):
         db.log_action("key_dates_extracted", project_id, {"found_any": dates.has_any()})
     except Exception:  # noqa: BLE001
         logger.exception("[%s] key-dates extraction failed (non-fatal)", project_id)
+
+
+def _extract_rfp_summary(project_id: str, rfp_text: str, client: ClaudeClient):
+    """Extracts the 8-category RFP summary (vendor info, bidder qualifications, cost proposal,
+    key events, evaluation process, submission requirements, other requirements, contract terms —
+    see pipeline/rfp_summary_extractor.py) — surfaced on the Go/No-Go Summary tab alongside key
+    dates and the compliance matrix. Non-fatal, exactly like _detect_rfp_structure and
+    _extract_key_dates above."""
+    try:
+        summary = extract_rfp_summary(rfp_text, client)
+        db.update_project(project_id, rfp_summary_json=json.dumps(summary.to_dict()))
+        db.log_action("rfp_summary_extracted", project_id, {"found_any": summary.has_any()})
+    except Exception:  # noqa: BLE001
+        logger.exception("[%s] RFP summary extraction failed (non-fatal)", project_id)
+
+
+def compute_go_no_go_suggestion_for_project(project_id: str):
+    """Computes and persists a fresh, LLM-based Go/No-Go recommendation for a project that has
+    just reached (or re-reached) the Summary tab — see pipeline/go_no_go_suggestion.py's module
+    docstring for why this is separate from, and later than, the early capability-fit check.
+    Called from three points, all once a project lands on "Awaiting Preview": the no-assumptions
+    branch of _run_phase3_and_4 below, main.py's accept_assumptions route (the assumptions-gate
+    branch), and main.py's preview/resubmit route (recomputed fresh after a "Needs Revision" edit,
+    since the content under review has changed).
+
+    Self-contained (loads everything it needs from the project row) so it can be called directly
+    from an interactive route without the caller having to assemble a Phase1Result/content dict.
+    Non-fatal — the Summary tab simply shows no AI suggestion for this project if this fails or if
+    no LLM client is configured (DEMO_MODE with no API key), exactly like every other AI-assist
+    check in this pipeline."""
+    try:
+        client = _get_client()
+        if client is None:
+            return
+        project = db.get_project(project_id)
+        if not project:
+            return
+
+        capability_fit = json.loads(project["capability_fit_json"]) if project.get("capability_fit_json") else None
+        rfp_summary = json.loads(project["rfp_summary_json"]) if project.get("rfp_summary_json") else None
+
+        compliance_matrix: list[dict] = []
+        assumptions: list[str] = []
+        if project.get("phase4_content_json"):
+            content = json.loads(project["phase4_content_json"])
+            compliance_matrix = content.get("compliance_matrix", [])
+            assumptions = content.get("assumptions", [])
+
+        suggestion = compute_go_no_go_suggestion(
+            project.get("name") or "", project.get("agency") or "",
+            capability_fit, compliance_matrix, rfp_summary, assumptions, client,
+        )
+        db.update_project(project_id, go_no_go_suggestion_json=json.dumps(suggestion.to_dict()))
+        db.log_action("go_no_go_suggestion_computed", project_id, {"overall": suggestion.overall})
+    except Exception:  # noqa: BLE001
+        logger.exception("[%s] Go/No-Go suggestion computation failed (non-fatal)", project_id)
 
 
 def _run_capability_fit(project_id: str, result: Phase1Result):
@@ -459,6 +527,12 @@ def _run_phase3_and_4(project_id: str, result: Phase1Result, client: ClaudeClien
     else:
         db.update_project(project_id, status="Awaiting Preview")
         db.log_action("awaiting_preview", project_id, {})
+        # No assumptions gate to pass through here, so this is the first moment the project is
+        # actually on the Summary tab — compute its fresh Go/No-Go suggestion now. (When there
+        # ARE assumption items, this is deferred until the user actually accepts them — see
+        # main.py's accept_assumptions route — since content the suggestion reads, like the
+        # assumptions list, can still be edited on that screen first.)
+        compute_go_no_go_suggestion_for_project(project_id)
 
 
 def build_preview_document_bytes(content: dict, template_choice: str,
