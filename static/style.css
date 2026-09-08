@@ -563,9 +563,10 @@ select.text-input, select {
 .btn-hero-ghost { background: rgba(255,255,255,.08); color: #fff; border-color: rgba(255,255,255,.25); }
 .btn-hero-ghost:hover { background: rgba(255,255,255,.16); text-decoration: none; }
 
-.kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
-@media (max-width: 900px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } }
-@media (max-width: 520px) { .kpi-grid { grid-template-columns: 1fr; } }
+.kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 20px; }
+@media (max-width: 1100px) { .kpi-grid { grid-template-columns: repeat(3,1fr); } }
+@media (max-width: 700px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } }
+@media (max-width: 420px) { .kpi-grid { grid-template-columns: 1fr; } }
 .kpi {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 19px;
   box-shadow: var(--shadow-sm); position: relative; overflow: hidden;
@@ -585,6 +586,8 @@ select.text-input, select {
 .kpi--warning .kpi__icon { background: var(--warning-bg); color: var(--warning); }
 .kpi--success .kpi__icon { background: var(--success-bg); color: var(--success); }
 .kpi--navy .kpi__icon { background: var(--navy); color: #fff; }
+.kpi--danger::before { background: var(--danger); }
+.kpi--danger .kpi__icon { background: var(--danger-bg); color: var(--danger); }
 
 /* align-items: stretch (grid's own default, restated for clarity) makes both cards match the
    height of whichever has more content — previously align-items:start let each card shrink to
@@ -602,7 +605,11 @@ select.text-input, select {
 @media (max-width: 900px) { .dash-grid { grid-template-columns: 1fr; } }
 
 /* ---------- Home: Statistics by Category — by Stage (stacked-bar chart) ---------- */
-.cat-stage-card { margin-top: 20px; }
+/* Matches the .dash-grid section below it in spacing — .cat-stage-card isn't followed by
+   another .card (it's followed by the .dash-grid wrapper div), so the site-wide ".card + .card"
+   rule never applies here; this margin does that job by hand, same as .cat-stage-card's own
+   margin-top does for the kpi-grid above it. */
+.cat-stage-card { margin-top: 20px; margin-bottom: 20px; }
 .cat-stage-note { font-size: .82rem; color: var(--ink-faint); margin: 0; font-weight: 500; }
 .cat-stage-toggle {
   font-family: inherit; font-size: .78rem; font-weight: 700; color: var(--accent);
@@ -614,20 +621,23 @@ select.text-input, select {
 .cat-stage-legend__item { display: inline-flex; align-items: center; gap: 7px; font-size: .8rem; font-weight: 600; color: var(--ink-soft); }
 .cat-stage-swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
 
-.cat-stage-row { display: grid; grid-template-columns: 168px 1fr; align-items: center; gap: 16px; padding: 9px 0; }
+/* Three explicit columns — label / bar-track / total — same shape as .status-stat-row above.
+   The total gets its own fixed-width column instead of sharing the bar's flex container, so a
+   category whose bar reaches 100% of the shared axis never pushes its own count off the edge
+   (the card clips overflow, so that used to render as a cut-off number). */
+.cat-stage-row { display: grid; grid-template-columns: 168px 1fr 42px; align-items: center; gap: 12px; padding: 9px 0; }
 .cat-stage-row__label { font-size: .85rem; font-weight: 600; color: var(--ink); text-decoration: none; }
 .cat-stage-row__label:hover { color: var(--accent); text-decoration: underline; }
-.cat-stage-row__track { position: relative; display: flex; align-items: center; gap: 10px; }
-.cat-stage-bar { display: flex; height: 22px; border-radius: 4px; overflow: hidden; background: transparent; flex-shrink: 0; }
+.cat-stage-bar { display: flex; height: 22px; border-radius: 4px; overflow: hidden; background: transparent; }
 .cat-stage-bar .seg { height: 100%; position: relative; display: block; text-decoration: none; }
 .cat-stage-bar .seg + .seg { margin-left: 2px; }
 .cat-stage-bar .seg:first-child { border-top-left-radius: 4px; border-bottom-left-radius: 4px; }
 .cat-stage-bar .seg:last-child { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }
 .cat-stage-bar .seg:hover { filter: brightness(0.88); cursor: pointer; }
-.cat-stage-row__total { font-family: var(--mono); font-weight: 700; color: var(--navy); font-size: .85rem; white-space: nowrap; }
+.cat-stage-row__total { font-family: var(--mono); font-weight: 700; color: var(--navy); font-size: .85rem; white-space: nowrap; text-align: right; }
 
-.cat-stage-axis { display: grid; grid-template-columns: 168px 1fr; gap: 16px; margin-top: 6px; }
-.cat-stage-axis__ticks { position: relative; height: 16px; border-top: 1px solid var(--border); max-width: calc(100% - 56px); }
+.cat-stage-axis { display: grid; grid-template-columns: 168px 1fr 42px; gap: 12px; margin-top: 6px; }
+.cat-stage-axis__ticks { position: relative; height: 16px; border-top: 1px solid var(--border); }
 .cat-stage-axis__ticks span { position: absolute; top: 5px; transform: translateX(-50%); font-size: .72rem; color: var(--ink-faint); font-family: var(--mono); }
 .cat-stage-axis__ticks span:first-child { transform: translateX(0); }
 .cat-stage-axis__ticks span:last-child { transform: translateX(-100%); }
@@ -648,14 +658,27 @@ select.text-input, select {
   padding: 7px 11px; border-radius: 8px; box-shadow: var(--shadow-md); pointer-events: none; max-width: 240px;
 }
 
-/* Stacked-bar segment fills — reuse the same status-color families as the .status-* badge
-   classes above (var(--success)/--neutral/--warning/--decision/--danger) so a status always
-   means the same color everywhere in the app, just solid here instead of a tinted background. */
-.stage-seg-analyzing { background: var(--neutral); }
-.stage-seg-clarifications-sent, .stage-seg-responses-pending { background: var(--warning); }
-.stage-seg-awaiting-assumptions-approval, .stage-seg-awaiting-preview, .stage-seg-ready-to-generate { background: var(--decision); }
+/* Stacked-bar segment fills — one distinct color PER STATUS (not per status-family the way
+   the .status-* badges above are grouped). The badges can afford to share a color across a
+   family (e.g. every "waiting on a human decision" status is the same purple pill) because
+   only one status is ever shown at a time there. This chart can show several statuses from
+   the *same* family side by side in one bar (e.g. "Review Assumptions" and "Review & Customize
+   Proposal" both belong to the decision/purple family) — reusing the family color there made
+   different segments visually identical. Submitted/Declined keep the app's existing
+   success/danger hex exactly (its two most common, most-recognized statuses); the rest get
+   their own hue so whichever 5 statuses happen to be "top 5" are always distinguishable.
+   All colors are validated for colorblind-safe adjacent contrast (>=8.0 CVD delta-E). */
+.stage-seg-analyzing { background: #2A78D6; }
+.stage-seg-not-a-bid-document { background: #6B7280; }
+.stage-seg-clarifications-sent { background: #EB6834; }
+.stage-seg-responses-pending { background: #1BAF7A; }
+.stage-seg-awaiting-assumptions-approval { background: #EDA100; }
+.stage-seg-awaiting-preview { background: #E87BA4; }
+.stage-seg-ready-to-generate { background: #4A3AA7; }
 .stage-seg-submitted { background: var(--success); }
-.stage-seg-declined, .stage-seg-cancelled, .stage-seg-not-a-bid-document, .stage-seg-no-go { background: var(--danger); }
+.stage-seg-declined { background: var(--danger); }
+.stage-seg-cancelled { background: #92400E; }
+.stage-seg-no-go { background: #7C2D12; }
 .stage-seg-other { background: var(--ink-faint); }
 
 /* ---------- Tabs (Audit Log: User Logs / System Logs) ---------- */
