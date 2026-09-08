@@ -381,6 +381,7 @@ def home(request: Request):
     awaiting_client = sum(1 for p in projects if p["status"] in STATUS_GROUPS["__awaiting_client__"]["statuses"])
     in_review = sum(1 for p in projects if p["status"] in STATUS_GROUPS["__in_review__"]["statuses"])
     submitted = sum(1 for p in projects if p["status"] == "Submitted")
+    declined = sum(1 for p in projects if p["status"] == "Declined")
     needs_attention = sum(1 for p in projects if p.get("error_message"))
 
     recent_projects = projects[:6]
@@ -390,6 +391,7 @@ def home(request: Request):
     return templates.TemplateResponse(request, "home.html", _ctx(request,
         total_projects=len(projects),
         awaiting_client=awaiting_client,
+        declined=declined,
         in_review=in_review,
         submitted=submitted,
         needs_attention=needs_attention,
