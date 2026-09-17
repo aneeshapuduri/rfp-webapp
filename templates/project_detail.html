@@ -16,16 +16,17 @@
 </div>
 
 <div class="card">
-    {% set steps = ["Analyzing", "Clarifications Sent", "Responses Pending", "Awaiting Assumptions Approval", "Awaiting Preview", "Ready to Generate", "Submitted"] %}
+    {% set steps = ["Analyzing", "Pending Intake Review", "Clarifications Sent", "Responses Pending", "Awaiting Assumptions Approval", "Awaiting Preview", "Ready to Generate", "Submitted"] %}
     {# Terminal/branch statuses each replace one step in the sequence above with a ✕ instead of
-       progressing further — "Not a Bid Document" branches right after Analyzing, "Cancelled"
-       branches at the assumptions decision, "No-Go" branches at the preview/summary review
-       step, "Declined" branches at the very end. "Needs Revision" also replaces the preview
-       step, but it's NOT terminal — it's a loop back to the preparer, shown with a ↺ in amber
-       instead of a ✕ in red (see is-revision below), since the project returns to this same
-       step once resubmitted rather than stopping for good. #}
-    {% set terminal_branch_index = {"Not a Bid Document": 0, "Cancelled": 3, "No-Go": 4, "Declined": 6} %}
-    {% set revision_branch_index = {"Needs Revision": 4} %}
+       progressing further — "Not a Bid Document" branches right after Analyzing, "Intake
+       Rejected" branches at the new early admin gate, "Cancelled" branches at the assumptions
+       decision, "No-Go" branches at the preview/summary review step, "Declined" branches at the
+       very end. "Needs Revision" also replaces the preview step, but it's NOT terminal — it's a
+       loop back to the preparer, shown with a ↺ in amber instead of a ✕ in red (see is-revision
+       below), since the project returns to this same step once resubmitted rather than stopping
+       for good. #}
+    {% set terminal_branch_index = {"Not a Bid Document": 0, "Intake Rejected": 1, "Cancelled": 4, "No-Go": 5, "Declined": 7} %}
+    {% set revision_branch_index = {"Needs Revision": 5} %}
     {% set is_terminal_branch = project.status in terminal_branch_index %}
     {% set is_revision_branch = project.status in revision_branch_index %}
     {% set is_branch = is_terminal_branch or is_revision_branch %}
@@ -78,6 +79,21 @@
                 </div>
                 <button type="submit" class="btn-primary">Upload &amp; Re-check</button>
             </form>
+        </div>
+
+        {% elif project.status == "Pending Intake Review" %}
+        <span class="status-panel__icon status-panel__icon--decision" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        </span>
+        <div>
+            <div class="status-panel__title">Admin Approval Pending</div>
+            <div class="status-panel__text">
+                {% if current_user.role == "admin" %}
+                The RFP has been extracted and summarized. Review the Go / No-Go read below and record an initial decision before scope-checking and clarification questions run.
+                {% else %}
+                The RFP has been extracted and summarized. An admin needs to record an initial Go/No-Go decision before this bid moves into scope-checking and clarification questions.
+                {% endif %}
+            </div>
         </div>
 
         {% elif project.status in ("Analyzing", "Responses Pending") %}
@@ -223,6 +239,17 @@
         </span>
         <div class="status-panel__title" style="color:var(--danger);">Cancelled — the assumptions made for this bid were not accepted.</div>
 
+        {% elif project.status == "Intake Rejected" %}
+        <span class="status-panel__icon status-panel__icon--stopped" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        </span>
+        <div style="flex:1;">
+            <div class="status-panel__title" style="color:var(--danger);">Rejected at Intake — stopped before scope-checking or clarification questions ever ran.</div>
+            <div class="status-panel__text">
+                An admin reviewed the RFP summary and Go/No-Go read right after extraction and decided not to pursue this bid.{% if project.go_no_go_decided_by %} Decided by {{ project.go_no_go_decided_by }}{% endif %}{% if project.go_no_go_decided_at %} on {{ project.go_no_go_decided_at[:10] }}{% endif %}.{% if project.go_no_go_comment %} Comment: {{ project.go_no_go_comment }}{% endif %}
+            </div>
+        </div>
+
         {% elif project.status == "No-Go" %}
         <span class="status-panel__icon status-panel__icon--stopped" aria-hidden="true">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
@@ -313,6 +340,37 @@
         {% endif %}
         <p class="coverage-note">This is a deterministic keyword-based fit check against config/company_profile.json,
            meant as a fast first read for the bid team — not a substitute for a human bid/no-bid call.</p>
+    </div>
+</div>
+{% endif %}
+
+{% if project.status == "Pending Intake Review" %}
+<div class="card" aria-labelledby="intake-heading">
+    <div class="card__head"><h2 id="intake-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> Initial Go/No-Go Decision</h2></div>
+    <div class="card__body">
+        {% if current_user.role == "admin" %}
+        <p class="coverage-note" style="margin-top:0;">Based on the RFP summary and the Go / No-Go read above, decide whether to pursue this bid. Choosing "Go" moves this into scope-checking and clarification questions. Choosing "No-Go" rejects it immediately and ends the pipeline here.</p>
+        <form action="/projects/{{ project.id }}/intake-decision" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="form-field">
+                <label for="intake_comment">Comment (optional)</label>
+                <textarea id="intake_comment" name="comment" rows="3" style="width:100%;" placeholder="Add context for this decision"></textarea>
+            </div>
+            <div class="decision-actions">
+                <button type="submit" name="decision" value="Go" class="btn-primary btn-approve"
+                        onclick="return confirm('Approve this bid to continue into scope-checking and clarification questions?');">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                    Go &amp; Continue
+                </button>
+                <button type="submit" name="decision" value="No-Go" class="btn-danger"
+                        onclick="return confirm('Reject this bid now? It will be marked Rejected at Intake and the pipeline stops here.');">
+                    No-Go &amp; Reject
+                </button>
+            </div>
+        </form>
+        {% else %}
+        <p class="coverage-note" style="margin-top:0;">Awaiting an admin's initial Go/No-Go decision before this bid moves into scope-checking and clarification questions.</p>
+        {% endif %}
     </div>
 </div>
 {% endif %}
