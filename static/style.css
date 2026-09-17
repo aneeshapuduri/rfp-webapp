@@ -288,10 +288,14 @@ tr.clickable-row:hover td:first-child a { color: var(--accent); }
    and decide," the same kind of step as Ready to Generate — so they share its purple
    "decision" color rather than the orange used for "waiting on the client" statuses above. */
 .status-awaiting-assumptions-approval, .status-awaiting-preview, .status-ready-to-generate { background: var(--decision-bg); color: var(--decision); }
+/* Pending Intake Review ("Admin Approval Pending") is the same "paused to decide" moment as the
+   statuses above, just earlier in the pipeline — same purple family. */
+.status-pending-intake-review { background: var(--decision-bg); color: var(--decision); }
 .status-submitted { background: var(--success-bg); color: var(--success); }
 /* Declined and Cancelled are both terminal "did not proceed" outcomes; Not a Bid Document is
-   a stopped/needs-attention state (re-upload required) — all three read as red. */
-.status-declined, .status-cancelled, .status-not-a-bid-document, .status-no-go { background: var(--danger-bg); color: var(--danger); }
+   a stopped/needs-attention state (re-upload required) — all three read as red. Intake Rejected
+   is the same terminal "did not proceed" outcome as No-Go, just decided at the earlier gate. */
+.status-declined, .status-cancelled, .status-not-a-bid-document, .status-no-go, .status-intake-rejected { background: var(--danger-bg); color: var(--danger); }
 /* Needs Revision is a loop-back, not a stop — it reads as the same "waiting" orange used for
    Clarifications Sent/Responses Pending above, not the purple "paused to decide" family or the
    red terminal family. */
