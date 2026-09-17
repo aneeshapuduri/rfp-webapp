@@ -86,6 +86,7 @@ from pipeline_runner import (
     process_manual_responses,
     process_new_upload,
     recompute_staffing_and_pricing,
+    resume_after_intake_approval,
 )
 # pipeline_runner's import above already inserts the pipeline/ package dir onto sys.path, so
 # this resolves the same way it does inside pipeline_runner.py itself.
@@ -139,6 +140,15 @@ def startup():
 STATUS_LABELS = {
     "Analyzing": "Analyzing",
     "Not a Bid Document": "Not a Bid Document — Re-upload Needed",
+    # New early admin gate: sits right after Phase 1 extraction + the deterministic capability-fit
+    # ("Available in Pamten") check, before scope-checking is finalized or any clarification
+    # questions go out. The project stays visible in the main Projects list throughout (not
+    # hidden) — this label is exactly what marks it as waiting on that early call.
+    "Pending Intake Review": "Admin Approval Pending",
+    # Terminal, and deliberately worded differently from the later-stage "Rejected" (No-Go) label
+    # below so it's clear at a glance which gate stopped the project — this one never reached
+    # scope-checking or clarification questions at all.
+    "Intake Rejected": "Rejected at Intake",
     "Clarifications Sent": "Awaiting Client Clarification",
     "Responses Pending": "Responses Pending",
     "Awaiting Assumptions Approval": "Review Assumptions",
@@ -166,6 +176,7 @@ STATUS_LABELS = {
 # stepper (see terminal_branch_statuses in project_detail.html), not part of this main sequence.
 STATUS_ORDER = [
     "Analyzing",
+    "Pending Intake Review",
     "Clarifications Sent",
     "Responses Pending",
     "Awaiting Assumptions Approval",
@@ -174,12 +185,15 @@ STATUS_ORDER = [
     "Submitted",
 ]
 
-TERMINAL_BRANCH_STATUSES = {"Not a Bid Document", "Declined", "Cancelled", "No-Go"}
+TERMINAL_BRANCH_STATUSES = {"Not a Bid Document", "Intake Rejected", "Declined", "Cancelled", "No-Go"}
 
-# The one status the /admin/approvals queue watches for — a project sitting here has finished
-# Phase 3/4 and any assumptions gate, and has never had (or is having a fresh) Go/No-Go call made
-# on it. "Needs Revision" is deliberately excluded: that project is with the preparer, not the
-# admin, until they resubmit and land back here.
+# The two statuses the /admin/approvals queue watches for — two separate admin decision points.
+# INTAKE_QUEUE_STATUS: right after Phase 1 + the deterministic capability-fit check, before scope-
+# checking is finalized or clarification questions go out — an early "should we even pursue this"
+# call. APPROVAL_QUEUE_STATUS: the later gate, once Phase 3/4 and any assumptions gate have
+# finished and a full draft proposal exists. "Needs Revision" is deliberately excluded from the
+# latter: that project is with the preparer, not the admin, until they resubmit and land back here.
+INTAKE_QUEUE_STATUS = "Pending Intake Review"
 APPROVAL_QUEUE_STATUS = "Awaiting Preview"
 
 # Synthetic multi-status groupings used only by the Home page's KPI tiles (a project's actual
@@ -194,7 +208,7 @@ STATUS_GROUPS = {
     },
     "__in_review__": {
         "label": "In Review",
-        "statuses": ["Analyzing", "Awaiting Assumptions Approval", "Awaiting Preview", "Needs Revision", "Ready to Generate"],
+        "statuses": ["Analyzing", "Pending Intake Review", "Awaiting Assumptions Approval", "Awaiting Preview", "Needs Revision", "Ready to Generate"],
     },
 }
 
@@ -213,12 +227,14 @@ def _ctx(request: Request, **extra) -> dict:
     """Common template context every page needs: who's logged in, the CSRF token for any
     forms on the page, whether DEMO_MODE is active (shown as a persistent banner so it's never
     ambiguous whether output on screen is real), and — for an admin only — how many projects are
-    sitting in the approvals queue, so base.html can show a live count on the "Admin · Approvals"
-    nav link on every page, not just that page itself. The extra query only runs for an admin
-    (members never see that nav item), so this stays cheap for the common case."""
+    sitting across BOTH admin decision queues (the early intake gate and the later full-proposal
+    gate), so base.html can show one combined live count on the "Admin · Approvals" nav link on
+    every page, not just that page itself. The extra queries only run for an admin (members never
+    see that nav item), so this stays cheap for the common case."""
     user = auth.current_user(request)
     pending_approvals_count = (
-        db.count_pending_approvals(APPROVAL_QUEUE_STATUS) if user and user["role"] == "admin" else 0
+        db.count_pending_approvals(INTAKE_QUEUE_STATUS) + db.count_pending_approvals(APPROVAL_QUEUE_STATUS)
+        if user and user["role"] == "admin" else 0
     )
     return {
         "current_user": user,
@@ -904,6 +920,59 @@ async def record_go_no_go_decision(
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
+@app.post("/projects/{project_id}/intake-decision")
+async def record_intake_decision(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    project_id: str,
+    _: None = Depends(auth.verify_csrf),
+):
+    """The EARLY Go/No-Go gate — sits right after Phase 1 extraction + the deterministic
+    capability-fit check (capability_fit_json, shown in the "Go / No-Go Decision" card above,
+    which already renders for this status with no changes needed), before scope-checking is
+    finalized or any clarification questions go out. Distinct from, and in addition to, the later
+    record_go_no_go_decision gate on the full-proposal Summary tab — both exist; this one just
+    runs first. Binary only (Go/No-Go, no "Needs Confirmation" — there's no draft yet to send back
+    for revision at this stage). "Go" resumes the pipeline exactly where it used to continue
+    automatically (see resume_after_intake_approval); "No-Go" is an immediate terminal rejection,
+    distinct from the later-stage "Rejected" so it's clear which gate stopped the project. Not
+    under /admin/*, so — like record_go_no_go_decision — it needs its own explicit admin check
+    here rather than relying on AuthGateMiddleware."""
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if user["role"] != "admin":
+        raise HTTPException(403, "Only an admin can record the intake Go/No-Go decision.")
+    if project["status"] != "Pending Intake Review":
+        raise HTTPException(400, "This project isn't at the intake review step.")
+
+    form = await request.form()
+    decision = str(form.get("decision", ""))
+    if decision not in ("Go", "No-Go"):
+        raise HTTPException(400, "Invalid decision — must be 'Go' or 'No-Go'.")
+
+    comment = str(form.get("comment", "")).strip() or None
+    fields = {
+        "go_no_go_decision": decision,
+        "go_no_go_decided_by": user["username"],
+        "go_no_go_decided_at": db.now(),
+        "go_no_go_comment": comment,
+    }
+    if decision == "No-Go":
+        fields["status"] = "Intake Rejected"
+        db.update_project(project_id, **fields)
+        db.log_action("intake_rejected", project_id, {"has_comment": bool(comment)}, user_identity=user["username"])
+    else:
+        # Status doesn't change to anything terminal here — resume_after_intake_approval (a
+        # background task, since it does real pipeline work) moves it on to "Clarifications Sent"
+        # or straight into Phase 3/4, whichever result.pipeline_decision calls for. Clear the
+        # decision fields afterward isn't needed: unlike the later gate, this project never comes
+        # back to THIS status again, so there's nothing to reset for a "fresh" intake decision.
+        db.update_project(project_id, **fields)
+        db.log_action("intake_approved", project_id, {"has_comment": bool(comment)}, user_identity=user["username"])
+        background_tasks.add_task(resume_after_intake_approval, project_id)
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
 @app.post("/projects/{project_id}/acknowledge-revision")
 def acknowledge_revision(request: Request, project_id: str, _: None = Depends(auth.verify_csrf)):
     """The preparer's explicit "I've read the admin's comment" step for a "Needs Revision"
@@ -1498,19 +1567,38 @@ def admin_activate_user(request: Request, user_id: str, _: None = Depends(auth.v
 
 @app.get("/admin/approvals", response_class=HTMLResponse)
 def admin_approvals(request: Request):
-    """Every project currently sitting at APPROVAL_QUEUE_STATUS ("Awaiting Admin Decision") that
-    hasn't already had a decision recorded — a focused queue for an admin to work through,
-    separate from the full Projects list (which still shows these same projects too, just mixed
-    in with every other status). Being at APPROVAL_QUEUE_STATUS isn't enough on its own: a
-    project there with go_no_go_decision already set to "Go" has already been decided and is now
-    waiting on the preparer to generate the document, not on an admin, so it's excluded here (see
-    db.count_pending_approvals for the same rule applied to the sidebar badge) — it reappears
-    automatically if resubmitted for a fresh decision, since that clears go_no_go_decision back to
-    null. Uses db.list_projects() directly rather than list_projects_for_user(): this page is
+    """Two focused queues for an admin to work through, separate from the full Projects list
+    (which still shows all of these same projects too, just mixed in with every other status):
+
+    - intake_projects: sitting at INTAKE_QUEUE_STATUS ("Admin Approval Pending") — the early gate,
+      right after Phase 1 + the deterministic capability-fit check, before scope-checking is
+      finalized or clarification questions go out.
+    - projects: sitting at APPROVAL_QUEUE_STATUS ("Awaiting Admin Decision") that hasn't already
+      had a decision recorded — the later gate, once a full draft proposal exists. Being at
+      APPROVAL_QUEUE_STATUS isn't enough on its own: a project there with go_no_go_decision
+      already set to "Go" has already been decided and is now waiting on the preparer to generate
+      the document, not on an admin, so it's excluded here (see db.count_pending_approvals for the
+      same rule applied to the sidebar badge) — it reappears automatically if resubmitted for a
+      fresh decision, since that clears go_no_go_decision back to null. (The intake queue doesn't
+      need this same filter: a project only ever sits at INTAKE_QUEUE_STATUS before its first-ever
+      decision there, and never returns to it afterward.)
+
+    Uses db.list_projects() directly rather than list_projects_for_user(): this page is
     admin-only, and admins already have unrestricted access to every project, so there's no
     per-user filtering to do here."""
+    all_projects = db.list_projects()
+    intake_projects = [_enrich_project(p) for p in all_projects if p["status"] == INTAKE_QUEUE_STATUS]
+    intake_projects.sort(key=lambda p: p.get("updated_at") or "")
+    for p in intake_projects:
+        # The deterministic capability-fit check is this queue's "AI Suggestion of Go or No-Go" —
+        # already computed unconditionally right after Phase 1 (see pipeline_runner._run_capability_fit),
+        # so no new computation is needed here, just parsing it for display like go_no_go_suggestion below.
+        p["capability_fit"] = (
+            json.loads(p["capability_fit_json"]) if p.get("capability_fit_json") else None
+        )
+
     projects = [
-        _enrich_project(p) for p in db.list_projects()
+        _enrich_project(p) for p in all_projects
         if p["status"] == APPROVAL_QUEUE_STATUS and not p.get("go_no_go_decision")
     ]
     # Oldest-waiting first — the natural triage order for a queue like this.
@@ -1519,7 +1607,9 @@ def admin_approvals(request: Request):
         p["go_no_go_suggestion"] = (
             json.loads(p["go_no_go_suggestion_json"]) if p.get("go_no_go_suggestion_json") else None
         )
-    return templates.TemplateResponse(request, "admin_approvals.html", _ctx(request, projects=projects))
+    return templates.TemplateResponse(
+        request, "admin_approvals.html", _ctx(request, intake_projects=intake_projects, projects=projects)
+    )
 
 
 # ---------- Admin: project categories ----------

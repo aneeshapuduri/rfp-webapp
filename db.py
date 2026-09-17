@@ -43,6 +43,11 @@ if not DATABASE_URL:
 VALID_STATUSES = [
     "Analyzing",
     "Not a Bid Document",
+    # New early admin gate: sits right after Phase 1 extraction + the deterministic capability-fit
+    # check, before scope-checking is finalized or any clarification questions go out. See
+    # main.py's intake_decision route and pipeline_runner.py's resume_after_intake_approval.
+    "Pending Intake Review",
+    "Intake Rejected",
     "Clarifications Sent",
     "Responses Pending",
     "Awaiting Assumptions Approval",

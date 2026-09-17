@@ -150,10 +150,12 @@ def check_document_validity(content: bytes, extension: str) -> DocumentValidityR
 
 
 def process_new_upload(project_id: str, content: bytes, extension: str, skip_validity_check: bool = False):
-    """Entry point for a freshly uploaded bid invitation. Runs Phase 1 + the Go/No-Go
-    capability check, then either halts for clarification or continues straight through
-    Phases 3-4 automatically. Takes raw bytes rather than a path so no plaintext copy of the
-    upload is ever written to a persistent location — only a temp file that's deleted before
+    """Entry point for a freshly uploaded bid invitation. Runs Phase 1 + the deterministic
+    Go/No-Go capability check, then stops at "Pending Intake Review" for an admin's early
+    Go/No-Go call — see resume_after_intake_approval() below for what used to happen
+    automatically right here (halting for clarification, or continuing into Phases 3-4) and now
+    only happens once an admin says Go. Takes raw bytes rather than a path so no plaintext copy of
+    the upload is ever written to a persistent location — only a temp file that's deleted before
     this function returns.
 
     `skip_validity_check` is set by main.py's create_project route when it already ran
@@ -212,13 +214,40 @@ def process_new_upload(project_id: str, content: bytes, extension: str, skip_val
 
         _run_capability_fit(project_id, result)
 
-        if result.pipeline_decision == "halt_for_clarification":
-            _generate_clarification_doc(project_id, result)
-        else:
-            _run_phase3_and_4(project_id, result, client, demo_case=_detect_demo_case(rfp_text) if client is None else None)
+        # Used to branch straight into clarification-doc generation or Phase 3/4 here,
+        # automatically, with no admin ever seeing the project first. Now it stops and waits for
+        # an admin's early Go/No-Go call — see resume_after_intake_approval() below, which
+        # reloads phase1_result_json and runs exactly this same branch once that Go is recorded.
+        db.update_project(project_id, status="Pending Intake Review")
+        db.log_action("intake_review_pending", project_id, {"pipeline_decision": result.pipeline_decision})
 
     except Exception as e:  # noqa: BLE001
         _record_failure(project_id, "phase1", e, status="Analyzing")
+
+
+def resume_after_intake_approval(project_id: str):
+    """Runs as a background task once an admin records a "Go" decision on a project sitting at
+    "Pending Intake Review" (see main.py's intake_decision route). Reloads the Phase 1 result
+    already persisted by process_new_upload above and runs exactly the branch that function used
+    to run automatically right after Phase 1: halt for clarification, or continue into Phase 3/4.
+    Mirrors the same reload-and-branch pattern _apply_client_responses already uses below (the
+    other place in this file that resumes the pipeline from a persisted Phase1Result rather than
+    fresh upload bytes) — including its fallback demo_case, since the original rfp_text is not
+    kept around here either, by the same design as everywhere else in this file."""
+    try:
+        project = db.get_project(project_id)
+        result = Phase1Result.from_dict(json.loads(project["phase1_result_json"]))
+        client = _get_client()
+        if client is None and not DEMO_MODE:
+            raise _no_client_error()
+
+        if result.pipeline_decision == "halt_for_clarification":
+            _generate_clarification_doc(project_id, result)
+        else:
+            _run_phase3_and_4(project_id, result, client, demo_case="lakeview" if client is None else None)
+
+    except Exception as e:  # noqa: BLE001
+        _record_failure(project_id, "phase1", e, status="Pending Intake Review")
 
 
 def _record_invalid_document(project_id: str, validity: DocumentValidityResult):
