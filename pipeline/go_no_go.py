@@ -33,11 +33,31 @@ _STOPWORDS = {
 
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9/+#\.]*")
 
+# Common word-form mismatches (an RFP saying "develop"/"engage"/"integrate" against a capability
+# statement saying "development"/"engagement"/"integrations") were a real source of false "gap"
+# flags — the exact-token match never had a chance even though the two phrasings mean the same
+# thing. This is a deliberately conservative suffix-stripping normalizer, not a full stemmer:
+# only plain, low-risk English inflections (plurals, gerunds) are stripped, in priority order so
+# a word doesn't get double-stripped. Irregular pairs (e.g. "maintain" vs "maintenance") aren't
+# unifiable this way — those are handled instead by spelling out both forms directly in
+# config/company_profile.json's core_capabilities text, which stays the source of truth for what
+# the company actually offers.
+def _stem(tok: str) -> str:
+    if tok.endswith("ing") and len(tok) > 5:
+        return tok[:-3]
+    if tok.endswith(("ches", "shes", "xes", "zes", "sses")) and len(tok) > 5:
+        return tok[:-2]
+    if tok.endswith("ies") and len(tok) > 5:
+        return tok[:-3] + "y"
+    if tok.endswith("s") and not tok.endswith("ss") and len(tok) > 4:
+        return tok[:-1]
+    return tok
+
 
 def _tokenize(text: str) -> set[str]:
     tokens = set()
     for raw in _TOKEN_RE.findall(text or ""):
-        tok = raw.strip(".").lower()
+        tok = _stem(raw.strip(".").lower())
         if len(tok) < 3:
             continue
         if tok in _STOPWORDS:
