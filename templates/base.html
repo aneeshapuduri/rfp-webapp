@@ -104,6 +104,12 @@ function __filterRows(inputEl, rowSelector, emptyId) {
   </nav>
 
   <div class="content" id="main-content">
+    {% if back_url %}
+    <a class="back-link" href="{{ back_url }}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      Back to {{ back_label }}
+    </a>
+    {% endif %}
     {% block content %}{% endblock %}
   </div>
 </div>
