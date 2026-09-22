@@ -403,30 +403,231 @@
 </div>
 {% endif %}
 
-<div class="card" aria-labelledby="documents-heading">
-    <div class="card__head"><h2 id="documents-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Documents</h2></div>
-    {% if documents %}
-    <ul class="doc-list">
-        {% for d in documents %}
-        <li class="doc-row">
-            <span class="doc-icon" aria-hidden="true">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-            </span>
-            <div>
-                <div class="doc-name"><a href="/projects/{{ project.id }}/documents/{{ d.id }}">{{ d.filename }}</a></div>
-                <div class="doc-meta">{{ d.doc_type | replace('_', ' ') }} — uploaded {{ d.uploaded_at[:10] }}</div>
+<div class="card" aria-label="Extracted project details">
+    <div class="tabs" role="tablist" aria-label="Extracted project detail sections" style="padding:16px 22px 0; margin-bottom:0;">
+        <button type="button" class="tab tab--active" role="tab" aria-selected="true" aria-controls="tab-panel-requirements" data-tab="requirements">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            Extracted Requirements
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="tab-panel-dates" data-tab="dates">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Key Dates
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="tab-panel-summary" data-tab="summary">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+            RFP Summary
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="tab-panel-documents" data-tab="documents">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            Documents{% if documents %} ({{ documents | length }}){% endif %}
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="tab-panel-compliance" data-tab="compliance">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="9" x2="9" y2="21"/></svg>
+            Compliance Matrix
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="tab-panel-pricing" data-tab="pricing">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            Pricing
+        </button>
+    </div>
+
+    <div class="tab-panel" id="tab-panel-requirements" role="tabpanel" aria-label="Extracted Requirements">
+        {% if requirements %}
+        <div style="padding:16px 22px 0;">
+            {{ search_box("requirements-search", "table.requirements-table.req-list tbody tr", "Search requirements…", empty_id="requirements-search-empty") }}
+        </div>
+        <table class="requirements-table req-list">
+            <caption class="visually-hidden">Extracted requirements with status</caption>
+            <thead>
+                <tr><th scope="col">Requirement</th><th scope="col">Status</th><th scope="col">Detail</th></tr>
+            </thead>
+            <tbody>
+                {% for r in requirements %}
+                <tr>
+                    <td>{{ r.requirement }}</td>
+                    <td>
+                        <span class="req-badge {{ r.status | replace('_','-') }}">
+                            {% if r.status == "clear" %}✓ Clear
+                            {% elif r.status == "ambiguous" %}⚠ Ambiguous
+                            {% elif r.status == "assumption_needed" %}~ Assumption Made
+                            {% endif %}
+                            {% if r.escalated_for_manual_review %} (Escalated){% endif %}
+                        </span>
+                    </td>
+                    <td>
+                        {% if r.clarification_question %}<em>Q:</em> {{ r.clarification_question }}{% endif %}
+                        {% if r.assumption_text %}<em>Assumed:</em> {{ r.assumption_text }}{% endif %}
+                        {% if r.client_response %}<br><em>Client said:</em> {{ r.client_response }}{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p id="requirements-search-empty" class="search-empty-note" hidden>No requirements match your search.</p>
+        <div style="height:12px;"></div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state__icon" aria-hidden="true">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
             </div>
-            <span class="doc-row__spacer"></span>
-            <a class="icon-btn" href="/projects/{{ project.id }}/documents/{{ d.id }}" title="Download {{ d.filename }}" aria-label="Download {{ d.filename }}">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            </a>
-        </li>
-        {% endfor %}
-    </ul>
-    {% else %}
-    <div class="card__body"><p style="margin:0; color:var(--ink-faint);">No documents yet.</p></div>
-    {% endif %}
+            <p>No requirements have been extracted yet. They'll appear here once the RFP has been analyzed.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="tab-panel" id="tab-panel-dates" role="tabpanel" aria-label="Key Dates" hidden>
+        <div class="card__body">
+            {% if key_dates and (key_dates.question_deadline or key_dates.submission_deadline or key_dates.evaluation_period or key_dates.award_date) %}
+            <div class="stat-row">
+                {% if key_dates.question_deadline %}<div class="stat"><div class="stat__label">Question Deadline</div><div class="stat__sub" style="font-size:.92rem; color:var(--ink); margin-top:4px;">{{ key_dates.question_deadline }}</div></div>{% endif %}
+                {% if key_dates.submission_deadline %}<div class="stat"><div class="stat__label">Submission Deadline</div><div class="stat__sub" style="font-size:.92rem; color:var(--ink); margin-top:4px;">{{ key_dates.submission_deadline }}</div></div>{% endif %}
+                {% if key_dates.evaluation_period %}<div class="stat"><div class="stat__label">Evaluation Period</div><div class="stat__sub" style="font-size:.92rem; color:var(--ink); margin-top:4px;">{{ key_dates.evaluation_period }}</div></div>{% endif %}
+                {% if key_dates.award_date %}<div class="stat"><div class="stat__label">Award / Results Date</div><div class="stat__sub" style="font-size:.92rem; color:var(--ink); margin-top:4px;">{{ key_dates.award_date }}</div></div>{% endif %}
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <div class="empty-state__icon" aria-hidden="true">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                </div>
+                <p>No key dates were found in the uploaded document.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="tab-panel" id="tab-panel-summary" role="tabpanel" aria-label="RFP Summary" hidden>
+        <div class="card__body">
+            {% set summary_categories = [
+                ("vendor_info", "Vendor / Bidder Information"), ("bidder_qualifications", "Bidder Qualifications"),
+                ("cost_proposal", "Cost Proposal"), ("key_events", "Key Events"),
+                ("evaluation_process", "Evaluation Process"), ("submission_requirements", "Proposal Submission Requirements"),
+                ("other_requirements", "Other Proposal Requirements"), ("contract_terms", "Contract Terms & Conditions"),
+            ] %}
+            {% if rfp_summary and rfp_summary.values() | select | list %}
+            <div class="summary-categories">
+                {% for field, label in summary_categories %}
+                {% if rfp_summary.get(field) %}
+                <div class="summary-category">
+                    <div class="summary-category__label">{{ label }}</div>
+                    <div class="summary-category__text">{{ rfp_summary[field] }}</div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <div class="empty-state__icon" aria-hidden="true">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </div>
+                <p>No additional RFP summary details (bidder qualifications, cost proposal, evaluation process, contract terms, etc.) were found in the uploaded document.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="tab-panel" id="tab-panel-documents" role="tabpanel" aria-label="Documents" hidden>
+        {% if documents %}
+        <ul class="doc-list">
+            {% for d in documents %}
+            <li class="doc-row">
+                <span class="doc-icon" aria-hidden="true">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </span>
+                <div>
+                    <div class="doc-name"><a href="/projects/{{ project.id }}/documents/{{ d.id }}">{{ d.filename }}</a></div>
+                    <div class="doc-meta">{{ d.doc_type | replace('_', ' ') }} — uploaded {{ d.uploaded_at[:10] }}</div>
+                </div>
+                <span class="doc-row__spacer"></span>
+                <a class="icon-btn" href="/projects/{{ project.id }}/documents/{{ d.id }}" title="Download {{ d.filename }}" aria-label="Download {{ d.filename }}">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state__icon" aria-hidden="true">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            </div>
+            <p>No documents yet.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="tab-panel" id="tab-panel-compliance" role="tabpanel" aria-label="Compliance Matrix" hidden>
+        {% if compliance_matrix %}
+        <div style="padding:16px 22px 0;">
+            {{ search_box("compliance-search", "table.compliance-table.compliance-list tbody tr", "Search the compliance matrix…", empty_id="compliance-search-empty") }}
+        </div>
+        <table class="compliance-table compliance-list">
+            <caption class="visually-hidden">Compliance matrix covering every extracted requirement</caption>
+            <thead><tr><th scope="col">Requirement</th><th scope="col">Response</th><th scope="col">Status</th></tr></thead>
+            <tbody>
+                {% for m in compliance_matrix %}
+                <tr><td>{{ m.requirement }}</td><td>{{ m.response }}</td><td>{{ m.status }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p id="compliance-search-empty" class="search-empty-note" hidden>No compliance rows match your search.</p>
+        <div class="card__body" style="padding-top:12px;">
+            <p class="coverage-note" style="margin:0;">{{ compliance_matrix | length }} of {{ compliance_matrix | length }} requirements covered.</p>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state__icon" aria-hidden="true">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="9" x2="9" y2="21"/></svg>
+            </div>
+            <p>The compliance matrix hasn't been generated yet — it's built once the proposal reaches the review stage.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="tab-panel" id="tab-panel-pricing" role="tabpanel" aria-label="Pricing" hidden>
+        <div class="card__body">
+            {% if pricing %}
+            <div class="stat-row">
+                <div class="stat"><div class="stat__label">Total price</div><div class="stat__value">${{ "{:,.2f}".format(pricing.total) }}</div></div>
+                <div class="stat"><div class="stat__label">Total hours</div><div class="stat__value">{{ pricing.total_hours }}</div></div>
+                <div class="stat"><div class="stat__label">Contingency</div><div class="stat__value">{{ pricing.contingency_pct }}%</div></div>
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <div class="empty-state__icon" aria-hidden="true">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                </div>
+                <p>Pricing hasn't been calculated yet — it's calculated once the proposal reaches the review stage.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
 </div>
+
+<script>
+(function () {
+    var tabBar = document.querySelector('.tabs[role="tablist"]');
+    if (!tabBar) return;
+    var tabs = tabBar.querySelectorAll('.tab');
+    var panels = {};
+    tabs.forEach(function (btn) {
+        panels[btn.dataset.tab] = document.getElementById(btn.getAttribute('aria-controls'));
+    });
+    function activate(name) {
+        if (!panels[name]) return;
+        tabs.forEach(function (btn) {
+            var isActive = btn.dataset.tab === name;
+            btn.classList.toggle('tab--active', isActive);
+            btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            panels[btn.dataset.tab].hidden = !isActive;
+        });
+        try { history.replaceState(null, '', '#tab-' + name); } catch (e) { /* ignore */ }
+    }
+    tabs.forEach(function (btn) {
+        btn.addEventListener('click', function () { activate(btn.dataset.tab); });
+    });
+    var initial = (location.hash || '').replace('#tab-', '');
+    if (initial && panels[initial]) activate(initial);
+})();
+</script>
 
 {% if can_upload_responses %}
 <div class="card" aria-labelledby="responses-heading">
@@ -501,51 +702,7 @@
 <div class="card" aria-labelledby="summary-heading">
     <div class="card__head"><h2 id="summary-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg> Summary &amp; Final Go/No-Go</h2></div>
     <div class="card__body">
-        {% if key_dates and (key_dates.question_deadline or key_dates.submission_deadline or key_dates.evaluation_period or key_dates.award_date) %}
-        <div class="capability-ref__label" style="margin-bottom:8px;">Key Dates</div>
-        <div class="stat-row" style="margin-bottom:20px;">
-            {% if key_dates.question_deadline %}
-            <div class="stat"><div class="stat__label">Question Deadline</div><div class="stat__sub" style="font-size:.92rem; color:var(--ink); margin-top:4px;">{{ key_dates.question_deadline }}</div></div>
-            {% endif %}
-            {% if key_dates.submission_deadline %}
-            <div class="stat"><div class="stat__label">Submission Deadline</div><div class="stat__sub" style="font-size:.92rem; color:var(--ink); margin-top:4px;">{{ key_dates.submission_deadline }}</div></div>
-            {% endif %}
-            {% if key_dates.evaluation_period %}
-            <div class="stat"><div class="stat__label">Evaluation Period</div><div class="stat__sub" style="font-size:.92rem; color:var(--ink); margin-top:4px;">{{ key_dates.evaluation_period }}</div></div>
-            {% endif %}
-            {% if key_dates.award_date %}
-            <div class="stat"><div class="stat__label">Award / Results Date</div><div class="stat__sub" style="font-size:.92rem; color:var(--ink); margin-top:4px;">{{ key_dates.award_date }}</div></div>
-            {% endif %}
-        </div>
-        {% else %}
-        <p class="coverage-note">No key dates were found in the uploaded document.</p>
-        {% endif %}
-
-        {% set summary_categories = [
-            ("vendor_info", "Vendor / Bidder Information"),
-            ("bidder_qualifications", "Bidder Qualifications"),
-            ("cost_proposal", "Cost Proposal"),
-            ("key_events", "Key Events"),
-            ("evaluation_process", "Evaluation Process"),
-            ("submission_requirements", "Proposal Submission Requirements"),
-            ("other_requirements", "Other Proposal Requirements"),
-            ("contract_terms", "Contract Terms & Conditions"),
-        ] %}
-        {% if rfp_summary and rfp_summary.values() | select | list %}
-        <div class="capability-ref__label" style="margin-bottom:8px;">RFP Summary</div>
-        <div class="summary-categories">
-            {% for field, label in summary_categories %}
-            {% if rfp_summary.get(field) %}
-            <div class="summary-category">
-                <div class="summary-category__label">{{ label }}</div>
-                <div class="summary-category__text">{{ rfp_summary[field] }}</div>
-            </div>
-            {% endif %}
-            {% endfor %}
-        </div>
-        {% else %}
-        <p class="coverage-note">No additional RFP summary details (bidder qualifications, cost proposal, evaluation process, contract terms, etc.) were found in the uploaded document.</p>
-        {% endif %}
+        <p class="coverage-note" style="margin-top:0;">Key dates and the full RFP summary are available in the <strong>Key Dates</strong> and <strong>RFP Summary</strong> tabs above.</p>
 
         {% if capability_fit and capability_fit.per_requirement %}
         <div class="capability-ref__label" style="margin-bottom:8px; margin-top:20px;">Extracted Asks / Scope — Available in Pamten</div>
@@ -896,100 +1053,10 @@
 </div>
 {% endif %}
 
-{% if requirements %}
-<div class="card" aria-labelledby="requirements-heading">
-    <div class="card__head"><h2 id="requirements-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> Extracted Requirements</h2></div>
-    <div style="padding:16px 22px 0;">
-        {{ search_box("requirements-search", "table.requirements-table.req-list tbody tr", "Search requirements…", empty_id="requirements-search-empty") }}
-    </div>
-    <table class="requirements-table req-list">
-        <caption class="visually-hidden">Extracted requirements with status</caption>
-        <thead>
-            <tr>
-                <th scope="col">Requirement</th>
-                <th scope="col">Status</th>
-                <th scope="col">Detail</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for r in requirements %}
-            <tr>
-                <td>{{ r.requirement }}</td>
-                <td>
-                    <span class="req-badge {{ r.status | replace('_','-') }}">
-                        {% if r.status == "clear" %}✓ Clear
-                        {% elif r.status == "ambiguous" %}⚠ Ambiguous
-                        {% elif r.status == "assumption_needed" %}~ Assumption Made
-                        {% endif %}
-                        {% if r.escalated_for_manual_review %} (Escalated){% endif %}
-                    </span>
-                </td>
-                <td>
-                    {% if r.clarification_question %}<em>Q:</em> {{ r.clarification_question }}{% endif %}
-                    {% if r.assumption_text %}<em>Assumed:</em> {{ r.assumption_text }}{% endif %}
-                    {% if r.client_response %}<br><em>Client said:</em> {{ r.client_response }}{% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    <p id="requirements-search-empty" class="search-empty-note" hidden>No requirements match your search.</p>
-</div>
-{% endif %}
-
-{% if pricing %}
-<div class="card" aria-labelledby="pricing-heading">
-    <div class="card__head"><h2 id="pricing-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> Effort &amp; Pricing Summary</h2></div>
-    <div class="card__body">
-        <div class="stat-row">
-            <div class="stat">
-                <div class="stat__label">Total price</div>
-                <div class="stat__value">${{ "{:,.2f}".format(pricing.total) }}</div>
-            </div>
-            <div class="stat">
-                <div class="stat__label">Total hours</div>
-                <div class="stat__value">{{ pricing.total_hours }}</div>
-            </div>
-            <div class="stat">
-                <div class="stat__label">Contingency</div>
-                <div class="stat__value">{{ pricing.contingency_pct }}%</div>
-            </div>
-        </div>
-    </div>
-</div>
-{% endif %}
-
-{% if compliance_matrix %}
-<div class="card" aria-labelledby="compliance-heading">
-    <div class="card__head"><h2 id="compliance-heading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="9" x2="9" y2="21"/></svg> Compliance Matrix</h2></div>
-    <div style="padding:16px 22px 0;">
-        {{ search_box("compliance-search", "table.compliance-table.compliance-list tbody tr", "Search the compliance matrix…", empty_id="compliance-search-empty") }}
-    </div>
-    <table class="compliance-table compliance-list">
-        <caption class="visually-hidden">Compliance matrix covering every extracted requirement</caption>
-        <thead>
-            <tr>
-                <th scope="col">Requirement</th>
-                <th scope="col">Response</th>
-                <th scope="col">Status</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for m in compliance_matrix %}
-            <tr>
-                <td>{{ m.requirement }}</td>
-                <td>{{ m.response }}</td>
-                <td>{{ m.status }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    <p id="compliance-search-empty" class="search-empty-note" hidden>No compliance rows match your search.</p>
-    <div class="card__body" style="padding-top:12px;">
-        <p class="coverage-note" style="margin:0;">{{ compliance_matrix | length }} of {{ compliance_matrix | length }} requirements covered.</p>
-    </div>
-</div>
-{% endif %}
+{# Extracted Requirements, Key Dates, RFP Summary, Documents, Compliance Matrix, and Pricing all
+   moved into the tabbed section above (see the "tabs" block right after the Go/No-Go Decision
+   card) — kept together there since they're all read-only reference/extracted data, rather than
+   scattered down the page in separate always-different-length cards. #}
 
 <section aria-labelledby="danger-heading" style="margin-top:28px;">
     <h2 id="danger-heading" class="visually-hidden">Project actions</h2>
