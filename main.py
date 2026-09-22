@@ -65,7 +65,9 @@ import json
 import logging
 import os
 import pathlib
+import re
 import secrets
+from urllib.parse import urlparse
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -223,10 +225,77 @@ def _enrich_project(p: dict) -> dict:
     return p
 
 
+
+# Static route -> friendly label for the "<- Back" link base.html renders at the top of every
+# page's content (see _compute_back_link below). Kept in sync with the sidebar's own link labels
+# in base.html so the back link and the sidebar always describe a page the same way.
+_BACK_LINK_LABELS = {
+    "/home": "Home",
+    "/": "Projects",
+    "/audit": "Audit Log",
+    "/admin/approvals": "Admin Approvals",
+    "/admin/users": "Admin Users",
+    "/admin/categories": "Admin Categories",
+    "/new": "New Project",
+}
+_PROJECT_PATH_RE = re.compile(r"^/projects/([A-Za-z0-9-]+)(?:/.*)?$")
+
+
+def _compute_back_link(request: Request, user: dict | None) -> tuple[str | None, str | None]:
+    """Where the "<- Back" link in base.html's content area should point: wherever the browser's
+    Referer header says the user actually came from — so a project opened from Admin Approvals
+    shows "Back to Admin Approvals", one opened from Home shows "Back to Home", and so on, rather
+    than a single fixed link that would lose exactly which page a user drilled in from (this is
+    the whole point: "back to the last visited page", not just "back to home" — Home is only the
+    fallback, for the common case of navigating into a page directly from Home, and for when
+    there's nothing more specific to point to).
+
+    Falls back to Home when there's no usable referer (a bookmark, a typed URL, a page refresh)
+    or when the referer turns out to be the current page itself — which legitimately happens
+    right after a form POST redirects back to the same page, since the browser's Referer for
+    that follow-up GET is the page that held the form: this same page. Pointing "back" at the
+    page already on screen isn't useful, so that case falls back to Home too. Returns (None,
+    None) on the Home page itself (nothing to go back to) or when logged out (no sidebar/content
+    shell at all on those pages — see base.html).
+
+    Deliberately non-fatal: this is a "nice to have" navigation aid, not core functionality, so
+    any failure here (a malformed Referer header, a transient DB error looking up a project
+    name) falls back to a plain Home link rather than breaking the page."""
+    if not user or request.url.path == "/home":
+        return None, None
+    try:
+        referer = request.headers.get("referer", "")
+        ref = urlparse(referer) if referer else None
+        # Only trust a same-origin referer — an external site's Referer header could claim any
+        # path, and while that's not an open-redirect risk (only the path is used, so the link
+        # always resolves back to this same app), it could still point somewhere nonsensical.
+        ref_path = ref.path if ref and (not ref.netloc or ref.netloc == request.url.netloc) else ""
+
+        if not ref_path or ref_path == request.url.path:
+            return "/home", "Home"
+
+        if ref_path in _BACK_LINK_LABELS:
+            return ref_path, _BACK_LINK_LABELS[ref_path]
+
+        m = _PROJECT_PATH_RE.match(ref_path)
+        if m:
+            project = db.get_project(m.group(1))
+            # No access check needed here: the Referer only gets set because the user's own
+            # browser already had that project page loaded, which means they already passed
+            # _get_project_or_403 to see it — showing its name back to them leaks nothing new.
+            return ref_path, (project["name"] if project else "Previous Project")
+
+        return ref_path, "Previous Page"
+    except Exception:  # noqa: BLE001
+        logging.getLogger("rfp_agent").exception("Failed computing the page back-link (non-fatal)")
+        return "/home", "Home"
+
+
 def _ctx(request: Request, **extra) -> dict:
     """Common template context every page needs: who's logged in, the CSRF token for any
     forms on the page, whether DEMO_MODE is active (shown as a persistent banner so it's never
-    ambiguous whether output on screen is real), and — for an admin only — how many projects are
+    ambiguous whether output on screen is real), where the "<- Back" link at the top of the page
+    should point (see _compute_back_link), and — for an admin only — how many projects are
     sitting across BOTH admin decision queues (the early intake gate and the later full-proposal
     gate), so base.html can show one combined live count on the "Admin · Approvals" nav link on
     every page, not just that page itself. The extra queries only run for an admin (members never
@@ -236,11 +305,14 @@ def _ctx(request: Request, **extra) -> dict:
         db.count_pending_approvals(INTAKE_QUEUE_STATUS) + db.count_pending_approvals(APPROVAL_QUEUE_STATUS)
         if user and user["role"] == "admin" else 0
     )
+    back_url, back_label = _compute_back_link(request, user)
     return {
         "current_user": user,
         "csrf_token": request.session.get("csrf_token", ""),
         "demo_mode": DEMO_MODE,
         "pending_approvals_count": pending_approvals_count,
+        "back_url": back_url,
+        "back_label": back_label,
         **extra,
     }
 
