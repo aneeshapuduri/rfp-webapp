@@ -89,11 +89,17 @@ class RequirementCapabilityMatch:
     tab can show "Available in Pamten: Yes/No" against every single item from the RFP, not just
     the aggregate coverage percentage and the (unmatched-only) gaps list below. `available` is
     exactly the inverse of "this requirement's id appears in `gaps`" — kept as an explicit,
-    readable field rather than making the template re-derive it from the gaps list."""
+    readable field rather than making the template re-derive it from the gaps list.
+
+    `manually_marked_available` is True when an admin overrode this specific item (see
+    apply_overrides below) rather than the deterministic keyword check finding a match — kept
+    separate from `available` so a template can still badge these as "marked available" instead
+    of showing them identically to an automatic match."""
     requirement_id: str
     requirement: str
     available: bool
     matched_capabilities: list[str] = field(default_factory=list)
+    manually_marked_available: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -110,6 +116,9 @@ class CapabilityFit:
     # Every extracted requirement, matched or not — see RequirementCapabilityMatch above.
     # Optional/empty on data written before this field existed (from_dict defaults it to []).
     per_requirement: list[RequirementCapabilityMatch] = field(default_factory=list)
+    # Items an admin manually marked available via apply_overrides — a subset of what the
+    # deterministic check originally flagged as a gap. Empty unless apply_overrides ran.
+    overridden_items: list[CapabilityGap] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -120,6 +129,7 @@ class CapabilityFit:
             "unmatched_capabilities": self.unmatched_capabilities,
             "gaps": [g.to_dict() for g in self.gaps],
             "per_requirement": [r.to_dict() for r in self.per_requirement],
+            "overridden_items": [g.to_dict() for g in self.overridden_items],
         }
 
     @staticmethod
@@ -132,7 +142,38 @@ class CapabilityFit:
             unmatched_capabilities=d.get("unmatched_capabilities", []),
             gaps=[CapabilityGap(**g) for g in d.get("gaps", [])],
             per_requirement=[RequirementCapabilityMatch(**r) for r in d.get("per_requirement", [])],
+            overridden_items=[CapabilityGap(**g) for g in d.get("overridden_items", [])],
         )
+
+
+def _classify(matched_req_count: int, total: int) -> tuple[str, str, float]:
+    """Shared by assess_capability_fit (the original deterministic read) and apply_overrides
+    (the same read recomputed after an admin manually marks some gaps available) so the
+    Go/"Go, with gaps"/No-Go thresholds and their wording never drift apart between the two."""
+    coverage_pct = round(100.0 * matched_req_count / total, 1) if total else 0.0
+    if coverage_pct >= 75:
+        overall = "Go"
+        reasoning = (
+            f"{matched_req_count} of {total} requirements ({coverage_pct}%) map directly to a "
+            "stated core capability. This RFP is a strong fit — proceed to full proposal."
+        )
+    elif coverage_pct >= 40:
+        overall = "Go, with gaps"
+        reasoning = (
+            f"Only {matched_req_count} of {total} requirements ({coverage_pct}%) map to a stated "
+            "core capability. This is bidable, but the unmatched requirements below should get a "
+            "human read before committing — they may need a subcontractor, a scope carve-out, or "
+            "an updated capability statement."
+        )
+    else:
+        overall = "No-Go"
+        reasoning = (
+            f"Only {matched_req_count} of {total} requirements ({coverage_pct}%) map to a stated "
+            "core capability. Most of what this RFP is asking for falls outside our documented "
+            "service offerings — recommend a leadership bid/no-bid review before investing further "
+            "proposal effort."
+        )
+    return overall, reasoning, coverage_pct
 
 
 def assess_capability_fit(result: Phase1Result, core_capabilities: list[str]) -> CapabilityFit:
@@ -166,31 +207,8 @@ def assess_capability_fit(result: Phase1Result, core_capabilities: list[str]) ->
         ))
 
     total = len(result.requirements)
-    coverage_pct = round(100.0 * matched_req_count / total, 1) if total else 0.0
     unmatched_capabilities = [c for c in core_capabilities if c not in matched_capability_names]
-
-    if coverage_pct >= 75:
-        overall = "Go"
-        reasoning = (
-            f"{matched_req_count} of {total} requirements ({coverage_pct}%) map directly to a "
-            "stated core capability. This RFP is a strong fit — proceed to full proposal."
-        )
-    elif coverage_pct >= 40:
-        overall = "Go, with gaps"
-        reasoning = (
-            f"Only {matched_req_count} of {total} requirements ({coverage_pct}%) map to a stated "
-            "core capability. This is bidable, but the unmatched requirements below should get a "
-            "human read before committing — they may need a subcontractor, a scope carve-out, or "
-            "an updated capability statement."
-        )
-    else:
-        overall = "No-Go"
-        reasoning = (
-            f"Only {matched_req_count} of {total} requirements ({coverage_pct}%) map to a stated "
-            "core capability. Most of what this RFP is asking for falls outside our documented "
-            "service offerings — recommend a leadership bid/no-bid review before investing further "
-            "proposal effort."
-        )
+    overall, reasoning, coverage_pct = _classify(matched_req_count, total)
 
     return CapabilityFit(
         overall=overall,
@@ -200,4 +218,74 @@ def assess_capability_fit(result: Phase1Result, core_capabilities: list[str]) ->
         unmatched_capabilities=unmatched_capabilities,
         gaps=gaps,
         per_requirement=per_requirement,
+    )
+
+
+def apply_overrides(fit: CapabilityFit, overridden_requirement_ids: set[str]) -> CapabilityFit:
+    """Layers admin-recorded "we can actually do this" overrides on top of a deterministic
+    CapabilityFit, without mutating the original assessment — capability_fit_json keeps the raw,
+    keyword-only read as a stable historical record; this returns a fresh CapabilityFit for
+    display, recomputed with the exact same coverage-threshold logic assess_capability_fit uses
+    (via _classify) so the overall read and coverage percentage stay internally consistent once
+    some gaps are marked available. `matched_capabilities`/`unmatched_capabilities` are left as
+    the deterministic keyword check found them — overriding one requirement doesn't necessarily
+    mean an entire stated capability now matches, so that comparison stays untouched.
+
+    If `overridden_requirement_ids` is empty this returns `fit` unchanged (same object) so
+    callers can call this unconditionally without a branch for "no overrides recorded yet"."""
+    if not overridden_requirement_ids:
+        return fit
+
+    if not fit.per_requirement:
+        # Legacy capability_fit_json predating the per_requirement field (see its docstring
+        # above) has no per-item availability data to safely recompute a total/coverage_pct
+        # from, so this only narrows the gaps list rather than risk fabricating a percentage
+        # off an incomplete denominator — still enough to unblock an admin on an old project.
+        overridden_items = [g for g in fit.gaps if g.requirement_id in overridden_requirement_ids]
+        if not overridden_items:
+            return fit
+        remaining_gaps = [g for g in fit.gaps if g.requirement_id not in overridden_requirement_ids]
+        return CapabilityFit(
+            overall=fit.overall, reasoning=fit.reasoning, coverage_pct=fit.coverage_pct,
+            matched_capabilities=fit.matched_capabilities, unmatched_capabilities=fit.unmatched_capabilities,
+            gaps=remaining_gaps, per_requirement=[], overridden_items=overridden_items,
+        )
+
+    per_requirement: list[RequirementCapabilityMatch] = []
+    gaps: list[CapabilityGap] = []
+    overridden_items: list[CapabilityGap] = []
+    matched_req_count = 0
+
+    for r in fit.per_requirement:
+        is_override = r.requirement_id in overridden_requirement_ids and not r.available
+        available = r.available or is_override
+        if available:
+            matched_req_count += 1
+        per_requirement.append(RequirementCapabilityMatch(
+            requirement_id=r.requirement_id, requirement=r.requirement,
+            available=available, matched_capabilities=r.matched_capabilities,
+            manually_marked_available=is_override or r.manually_marked_available,
+        ))
+        if not available:
+            gaps.append(CapabilityGap(requirement_id=r.requirement_id, requirement=r.requirement))
+        elif is_override or r.manually_marked_available:
+            overridden_items.append(CapabilityGap(requirement_id=r.requirement_id, requirement=r.requirement))
+
+    total = len(per_requirement)
+    overall, reasoning, coverage_pct = _classify(matched_req_count, total)
+    if overridden_items:
+        reasoning += (
+            f" ({len(overridden_items)} item{'s' if len(overridden_items) != 1 else ''} manually "
+            "marked available by an admin, on top of the automatic keyword check.)"
+        )
+
+    return CapabilityFit(
+        overall=overall,
+        reasoning=reasoning,
+        coverage_pct=coverage_pct,
+        matched_capabilities=fit.matched_capabilities,
+        unmatched_capabilities=fit.unmatched_capabilities,
+        gaps=gaps,
+        per_requirement=per_requirement,
+        overridden_items=overridden_items,
     )
