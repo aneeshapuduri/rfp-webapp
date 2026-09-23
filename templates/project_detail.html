@@ -324,20 +324,59 @@
 
         {% if capability_fit.gaps %}
         <div class="capability-ref__label" style="margin-bottom:8px;">Requirements with no matching capability ({{ capability_fit.gaps | length }})</div>
+        {% if current_user.role == "admin" %}
+        <p class="coverage-note" style="margin-top:0;">If we're actually willing or able to deliver one of these — a service that just isn't in our stated capability list yet — check it as available. It moves into "Marked available" below and the coverage score and Go/No-Go read above update to reflect it.</p>
+        {% endif %}
         <ul class="fit-list">
             {% for g in capability_fit.gaps %}
             <li class="fit-row fit-gap">
                 <span class="fit-row__icon" aria-hidden="true">!</span>
-                <div>
+                <div style="flex:1;">
                     <span class="fit-row__area">{{ g.requirement }}</span>
                     <span class="fit-row__tag">Gap</span>
                 </div>
+                {% if current_user.role == "admin" %}
+                <form action="/projects/{{ project.id }}/capability-override" method="post" class="inline-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="requirement_id" value="{{ g.requirement_id }}">
+                    <label style="display:flex; align-items:center; gap:6px; font-size:.82rem; font-weight:600; color:var(--ink-soft); white-space:nowrap; cursor:pointer;">
+                        <input type="checkbox" name="mark_available" style="width:auto;" onchange="this.form.submit();">
+                        Mark available
+                    </label>
+                </form>
+                {% endif %}
             </li>
             {% endfor %}
         </ul>
         {% endif %}
+
+        {% if capability_fit.overridden_items %}
+        <div class="capability-ref__label" style="margin-bottom:8px; margin-top:16px;">Marked available by an admin ({{ capability_fit.overridden_items | length }})</div>
+        <ul class="fit-list">
+            {% for g in capability_fit.overridden_items %}
+            <li class="fit-row">
+                <span class="fit-row__icon" aria-hidden="true" style="background:var(--success-bg); color:var(--success);">✓</span>
+                <div style="flex:1;">
+                    <span class="fit-row__area">{{ g.requirement }}</span>
+                    <span class="fit-row__tag" style="background:var(--success-bg); color:var(--success);">Available</span>
+                </div>
+                {% if current_user.role == "admin" %}
+                <form action="/projects/{{ project.id }}/capability-override" method="post" class="inline-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="requirement_id" value="{{ g.requirement_id }}">
+                    <label style="display:flex; align-items:center; gap:6px; font-size:.82rem; font-weight:600; color:var(--ink-soft); white-space:nowrap; cursor:pointer;">
+                        <input type="checkbox" name="mark_available" checked style="width:auto;" onchange="this.form.submit();">
+                        Mark available
+                    </label>
+                </form>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+
         <p class="coverage-note">This is a deterministic keyword-based fit check against config/company_profile.json,
-           meant as a fast first read for the bid team — not a substitute for a human bid/no-bid call.</p>
+           meant as a fast first read for the bid team — not a substitute for a human bid/no-bid call{% if capability_fit.overridden_items %}, apart from the items marked available above{% endif %}.</p>
     </div>
 </div>
 {% endif %}
@@ -714,7 +753,7 @@
                 <tr>
                     <td>{{ r.requirement }}</td>
                     <td style="white-space:nowrap;">
-                        {% if r.available %}<span class="status-pill status-submitted">Yes</span>
+                        {% if r.available %}<span class="status-pill status-submitted">Yes</span>{% if r.manually_marked_available %} <span class="coverage-note" style="display:inline; font-size:.76rem;">(marked available by an admin)</span>{% endif %}
                         {% else %}<span class="status-pill status-declined">No</span>{% endif %}
                     </td>
                 </tr>
