@@ -202,6 +202,15 @@ _MIGRATIONS = [
     # acknowledgment from a prior revision round never carries into a new one.
     ("projects", "revision_acknowledged_by", "TEXT"),
     ("projects", "revision_acknowledged_at", "TEXT"),
+    # A JSON list of requirement_ids an admin has manually marked "available" on top of the
+    # deterministic capability-fit check in capability_fit_json — e.g. a service the client asked
+    # about that we don't have a stated core capability for yet, but are willing/able to deliver.
+    # Deliberately kept separate from (and never written into) capability_fit_json itself, which
+    # stays the untouched, reproducible output of the automatic keyword check; this column is
+    # merged on top of it at render time (see pipeline/go_no_go.py's apply_overrides) so the
+    # original assessment remains a stable historical record even as overrides are added or
+    # undone. Null/empty means no overrides have been recorded yet.
+    ("projects", "capability_overrides_json", "TEXT"),
 ]
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None

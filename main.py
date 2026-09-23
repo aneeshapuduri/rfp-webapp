@@ -93,6 +93,7 @@ from pipeline_runner import (
 # pipeline_runner's import above already inserts the pipeline/ package dir onto sys.path, so
 # this resolves the same way it does inside pipeline_runner.py itself.
 from pipeline.schema import Phase1Result
+from pipeline.go_no_go import CapabilityFit, apply_overrides
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -329,6 +330,19 @@ def _get_project_or_403(project_id: str, user: dict, allow_deleted: bool = False
     if not db.user_can_access_project(user, project):
         raise HTTPException(404, "Project not found.")
     return project
+
+
+def _effective_capability_fit(project: dict) -> CapabilityFit | None:
+    """The capability-fit read a template should actually show: the deterministic
+    capability_fit_json check with any admin-recorded capability_overrides_json layered on top
+    (see pipeline/go_no_go.py's apply_overrides). Used anywhere capability_fit is displayed
+    (project_detail, admin_approvals) so a manual override is reflected consistently everywhere,
+    without ever mutating the original stored assessment."""
+    if not project.get("capability_fit_json"):
+        return None
+    fit = CapabilityFit.from_dict(json.loads(project["capability_fit_json"]))
+    overridden_ids = set(json.loads(project["capability_overrides_json"])) if project.get("capability_overrides_json") else set()
+    return apply_overrides(fit, overridden_ids)
 
 
 async def _read_capped(file: UploadFile, max_bytes: int) -> bytes:
@@ -686,9 +700,8 @@ def project_detail(request: Request, project_id: str):
     if project.get("pending_client_responses_json"):
         pending_responses = json.loads(project["pending_client_responses_json"])
 
-    capability_fit = None
-    if project.get("capability_fit_json"):
-        capability_fit = json.loads(project["capability_fit_json"])
+    capability_fit_obj = _effective_capability_fit(project)
+    capability_fit = capability_fit_obj.to_dict() if capability_fit_obj else None
 
     compliance_matrix = []
     pricing = None
@@ -1045,6 +1058,50 @@ async def record_intake_decision(
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
+@app.post("/projects/{project_id}/capability-override")
+async def record_capability_override(
+    request: Request,
+    project_id: str,
+    _: None = Depends(auth.verify_csrf),
+):
+    """Lets an admin manually mark one requirement from the "Go / No-Go Decision" card's gaps
+    list as available — e.g. the client asked about a service we don't have a stated core
+    capability for, but are actually willing/able to deliver. Deliberately does NOT touch
+    capability_fit_json (the deterministic keyword check's own output stays an untouched,
+    reproducible record); instead it adds or removes one requirement_id from the separate
+    capability_overrides_json list, and every place capability_fit is displayed re-derives the
+    effective view from both columns together (see _effective_capability_fit / apply_overrides).
+    Not under /admin/*, so — like the other project-level decision routes — it needs its own
+    explicit admin check here rather than relying on AuthGateMiddleware. Not gated to a specific
+    project status: unlike the Go/No-Go decisions above, this is a correction to an automated
+    read rather than a pipeline-flow gate, so it can be applied (or undone) any time the project
+    has a capability-fit assessment at all."""
+    user = auth.current_user(request)
+    project = _get_project_or_403(project_id, user)
+    if user["role"] != "admin":
+        raise HTTPException(403, "Only an admin can mark a capability gap as available.")
+    if not project.get("capability_fit_json"):
+        raise HTTPException(400, "This project doesn't have a capability-fit assessment yet.")
+
+    form = await request.form()
+    requirement_id = str(form.get("requirement_id", "")).strip()
+    if not requirement_id:
+        raise HTTPException(400, "Missing requirement_id.")
+    mark_available = form.get("mark_available") == "on"
+
+    overridden_ids = set(json.loads(project["capability_overrides_json"])) if project.get("capability_overrides_json") else set()
+    if mark_available:
+        overridden_ids.add(requirement_id)
+    else:
+        overridden_ids.discard(requirement_id)
+    db.update_project(project_id, capability_overrides_json=json.dumps(sorted(overridden_ids)))
+    db.log_action(
+        "capability_override_marked_available" if mark_available else "capability_override_reverted_to_gap",
+        project_id, {"requirement_id": requirement_id}, user_identity=user["username"],
+    )
+    return RedirectResponse(f"/projects/{project_id}#gate-heading", status_code=303)
+
+
 @app.post("/projects/{project_id}/acknowledge-revision")
 def acknowledge_revision(request: Request, project_id: str, _: None = Depends(auth.verify_csrf)):
     """The preparer's explicit "I've read the admin's comment" step for a "Needs Revision"
@@ -1103,6 +1160,10 @@ async def reupload_bid_document(
         validity_rejection_reason=None,
         phase1_result_json=None,
         capability_fit_json=None,
+        # A re-uploaded document gets a fresh Phase 1 extraction with new requirement_ids, so any
+        # prior manual capability overrides (keyed by requirement_id) no longer refer to anything
+        # real — clear them rather than leave stale, silently-inert entries behind.
+        capability_overrides_json=None,
     )
     background_tasks.add_task(process_new_upload, project_id, content, extension)
 
@@ -1664,10 +1725,11 @@ def admin_approvals(request: Request):
     for p in intake_projects:
         # The deterministic capability-fit check is this queue's "AI Suggestion of Go or No-Go" —
         # already computed unconditionally right after Phase 1 (see pipeline_runner._run_capability_fit),
-        # so no new computation is needed here, just parsing it for display like go_no_go_suggestion below.
-        p["capability_fit"] = (
-            json.loads(p["capability_fit_json"]) if p.get("capability_fit_json") else None
-        )
+        # so no new computation is needed here, just parsing it for display like go_no_go_suggestion
+        # below. Goes through _effective_capability_fit so a manual override recorded on the
+        # project's page (see record_capability_override) shows up here too, not just there.
+        fit_obj = _effective_capability_fit(p)
+        p["capability_fit"] = fit_obj.to_dict() if fit_obj else None
 
     projects = [
         _enrich_project(p) for p in all_projects
