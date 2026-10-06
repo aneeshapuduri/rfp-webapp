@@ -7,6 +7,7 @@ bid must be exactly reproducible from the inputs, not subject to model variance.
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 from dataclasses import dataclass
 
@@ -73,6 +74,19 @@ class PricingSummary:
         }
 
 
+def _finite_non_negative(value, label: str) -> float:
+    """Coerces LLM- or form-supplied numbers ("40", 40.0, "2.5") and rejects junk (None, "n/a",
+    NaN, inf, negatives) with a ValueError instead of an opaque TypeError or a silently absurd
+    price."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid {label}: {value!r} is not a number.") from None
+    if math.isnan(f) or math.isinf(f) or f < 0:
+        raise ValueError(f"Invalid {label}: {value!r} must be a non-negative, finite number.")
+    return f
+
+
 def load_rate_card() -> dict:
     return json.loads(RATE_CARD_PATH.read_text(encoding="utf-8"))
 
@@ -96,7 +110,7 @@ def build_pricing_summary(staffing_plan: list[dict]) -> PricingSummary:
         role = item["role"]
         override_rate = item.get("hourly_rate")
         if override_rate is not None:
-            hourly_rate = float(override_rate)
+            hourly_rate = _finite_non_negative(override_rate, f"hourly rate for '{role}'")
         elif role in rate_lookup:
             hourly_rate = rate_lookup[role]
         else:
@@ -106,8 +120,8 @@ def build_pricing_summary(staffing_plan: list[dict]) -> PricingSummary:
             )
         lines.append(StaffingLine(
             role=role,
-            headcount=int(item["headcount"]),
-            hours_per_person=int(item["hours_per_person"]),
+            headcount=int(_finite_non_negative(item["headcount"], f"headcount for '{role}'")),
+            hours_per_person=int(_finite_non_negative(item["hours_per_person"], f"hours for '{role}'")),
             hourly_rate=hourly_rate,
             rationale=item.get("rationale", ""),
         ))

@@ -20,28 +20,41 @@ from __future__ import annotations
 import json
 
 
+def _strip_fence(text: str) -> str:
+    """Pull the first fenced body out of `text` wherever it sits (the model may add chatter
+    before the fence). Returns `text` unchanged when there is no complete fence."""
+    parts = text.split("```")
+    if len(parts) < 3:
+        return text
+    body = parts[1].lstrip()
+    if body.lower().startswith("json"):
+        body = body[4:]
+    return body.strip()
+
+
 def parse_llm_json(raw: str, provider_name: str) -> list | dict:
     """Parse `raw` (a model's raw text response) as JSON, tolerating a markdown fence and
     trailing extra data after the first valid value. Raises RuntimeError, with the original
     raw output attached for debugging, if no valid JSON value can be recovered at all."""
-    cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.split("```")[1]
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:]
-    cleaned = cleaned.strip()
+    text = (raw or "").strip()
+    candidates = [text]
+    if "```" in text:
+        candidates.append(_strip_fence(text))
 
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        if e.msg == "Extra data":
-            # The first e.pos characters already form one complete, valid JSON value —
-            # decode just that and ignore whatever the model appended after it.
-            try:
-                value, _end = json.JSONDecoder().raw_decode(cleaned)
-                return value
-            except json.JSONDecodeError:
-                pass
-        raise RuntimeError(
-            f"{provider_name} did not return valid JSON: {e}\nRaw output:\n{raw}"
-        ) from e
+    last_error: json.JSONDecodeError | None = None
+    for cleaned in candidates:
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            last_error = e
+            if e.msg == "Extra data":
+                # The first e.pos characters already form one complete, valid JSON value —
+                # decode just that and ignore whatever the model appended after it.
+                try:
+                    value, _end = json.JSONDecoder().raw_decode(cleaned)
+                    return value
+                except json.JSONDecodeError:
+                    pass
+    raise RuntimeError(
+        f"{provider_name} did not return valid JSON: {last_error}\nRaw output:\n{raw}"
+    ) from last_error

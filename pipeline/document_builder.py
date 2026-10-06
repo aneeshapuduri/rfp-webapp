@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import datetime
 import io
+import re
 
 from docx import Document
 from docx.enum.section import WD_SECTION
@@ -141,7 +142,7 @@ def _add_toc(doc: Document):
     renders with placeholder text until opened in Word — Word normally prompts to update fields
     on open, and it can always be refreshed manually (right-click inside it -> Update Field, or
     select it and press F9)."""
-    doc.add_heading("Table of Contents", level=1)
+    _add_heading(doc, "Table of Contents", level=1)
 
     paragraph = doc.add_paragraph()
     run = paragraph.add_run()
@@ -172,20 +173,63 @@ def _add_toc(doc: Document):
     doc.add_section(WD_SECTION.NEW_PAGE)
 
 
+_XML_BAD_CHARS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
+def _sanitize(obj):
+    """python-docx raises ValueError ("All strings must be XML compatible") on control characters
+    such as \x00 or \x0b, which easily slip in from pasted text, PDF extraction, or LLM output
+    and used to fail the whole proposal build. Strips them from every string in the content."""
+    if isinstance(obj, str):
+        return _XML_BAD_CHARS.sub("", obj)
+    if isinstance(obj, list):
+        return [_sanitize(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    return obj
+
+
+def _add_heading(doc: Document, text: str, level: int):
+    """doc.add_heading, tolerant of a client template that doesn't define 'Heading N' styles."""
+    try:
+        return doc.add_heading(text, level=level)
+    except KeyError:
+        p = doc.add_paragraph()
+        run = p.add_run(text)
+        run.font.bold = True
+        run.font.size = Pt(max(11, 18 - 2 * level))
+        return p
+
+
+def _add_styled_paragraph(doc: Document, text: str, style: str | None):
+    """doc.add_paragraph(text, style=...) that falls back to a plain paragraph (with a literal
+    bullet for 'List Bullet') when a client template lacks that style."""
+    try:
+        return doc.add_paragraph(text, style=style)
+    except KeyError:
+        return doc.add_paragraph(("\u2022 " + text) if style == "List Bullet" else text)
+
+
 def _add_body(doc: Document, text: str):
     for raw_line in text.split("\n"):
         line = raw_line.strip()
         if not line:
             continue
         if line.startswith("- "):
-            doc.add_paragraph(line[2:], style="List Bullet")
+            _add_styled_paragraph(doc, line[2:], "List Bullet")
         else:
             doc.add_paragraph(line)
 
 
 def _add_table(doc: Document, headers: list[str], rows: list[list[str]], widths_in: list[float], status_col: int | None = None):
     table = doc.add_table(rows=1, cols=len(headers))
-    table.style = "Light Grid Accent 1"
+    try:
+        table.style = "Light Grid Accent 1"
+    except (KeyError, ValueError):
+        try:
+            table.style = "Table Grid"
+        except (KeyError, ValueError):
+            pass  # a template with neither style still gets an (unbordered) table
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     widths = [Inches(w) for w in widths_in]
     hdr = table.rows[0].cells
@@ -226,7 +270,7 @@ def _insert_paragraph_after(doc: Document, anchor_element, text: str = "", style
     a client's uploaded template, this creates the paragraph normally (so it lands at the end),
     then relocates its underlying XML element to sit right after anchor_element. Returns the new
     element so a caller inserting multiple lines in a row can chain them in order."""
-    new_p = doc.add_paragraph(text, style=style)
+    new_p = _add_styled_paragraph(doc, text, style)
     anchor_element.addnext(new_p._p)
     return new_p._p
 
@@ -264,7 +308,7 @@ class _AppendSink:
     def bullets(self, items: list[str], empty_text: str | None = None):
         if items:
             for item in items:
-                self.doc.add_paragraph(item, style="List Bullet")
+                _add_styled_paragraph(self.doc, item, "List Bullet")
         elif empty_text:
             self.doc.add_paragraph(empty_text)
 
@@ -523,10 +567,10 @@ def _render_extra_sections(doc: Document, content: dict):
     extra_sections = content.get("extra_sections") or []
     if not extra_sections:
         return
-    doc.add_heading("Additional Sections Requested by the RFP", level=1)
+    _add_heading(doc, "Additional Sections Requested by the RFP", level=1)
     sink = _AppendSink(doc)
     for item in extra_sections:
-        doc.add_heading(item["title"], level=2)
+        _add_heading(doc, item["title"], level=2)
         sink.body(item["content"])
 
 
@@ -609,7 +653,7 @@ def _build_final_proposal_with_template(output_path: str, content: dict, templat
 
     unmatched = mapping.get("unmatched", [])
     if unmatched:
-        doc.add_heading("Needs Manual Placement", level=1)
+        _add_heading(doc, "Needs Manual Placement", level=1)
         note = doc.add_paragraph()
         note.add_run(
             "The following sections could not be confidently matched to a heading in your "
@@ -617,7 +661,7 @@ def _build_final_proposal_with_template(output_path: str, content: dict, templat
             "appropriate place in the document."
         ).italic = True
         for our_section in unmatched:
-            doc.add_heading(our_section, level=2)
+            _add_heading(doc, our_section, level=2)
             _append_section_content(doc, our_section, content, company)
 
     _render_extra_sections(doc, content)
@@ -654,21 +698,21 @@ def _build_final_proposal_with_rfp_structure(output_path: str, content: dict, rf
         our_section = heading_to_section.get(heading)
         if our_section is None:
             continue
-        doc.add_heading(heading, level=1)
+        _add_heading(doc, heading, level=1)
         renderer = SECTION_RENDERERS.get(our_section)
         if renderer is not None:
             renderer(sink, content, company)
 
     unmatched = mapping.get("unmatched", [])
     if unmatched:
-        doc.add_heading("Additional Sections", level=1)
+        _add_heading(doc, "Additional Sections", level=1)
         note = doc.add_paragraph()
         note.add_run(
             "The RFP's specified response structure didn't explicitly call for the following "
             "sections; they're included here so no generated content is left out."
         ).italic = True
         for our_section in unmatched:
-            doc.add_heading(our_section, level=2)
+            _add_heading(doc, our_section, level=2)
             _append_section_content(doc, our_section, content, company)
 
     _render_extra_sections(doc, content)
@@ -690,6 +734,7 @@ def build_final_proposal(output_path: str, content: dict, template_path: str | N
     headings (see _build_final_proposal_with_rfp_structure). Both template_path and rfp_headings
     absent reproduces the original default-template behavior exactly as before either parameter
     existed."""
+    content = _sanitize(content)
     if template_path is not None:
         return _build_final_proposal_with_template(output_path, content, template_path, section_mapping)
 
@@ -705,7 +750,7 @@ def build_final_proposal(output_path: str, content: dict, template_path: str | N
 
     sink = _AppendSink(doc)
     for i, section in enumerate(OUR_SECTIONS, start=1):
-        doc.add_heading(f"{i}. {section}", level=1)
+        _add_heading(doc, f"{i}. {section}", level=1)
         renderer = SECTION_RENDERERS.get(section)
         if renderer is not None:
             renderer(sink, content, company)

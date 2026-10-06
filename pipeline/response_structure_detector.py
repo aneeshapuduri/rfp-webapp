@@ -46,5 +46,5 @@ def detect_response_structure(rfp_text: str, client: ClaudeClient) -> ResponseSt
     return ResponseStructureResult(
         detected=detected,
         sections=sections if detected else [],
-        reasoning=raw.get("reasoning", "").strip(),
+        reasoning=str(raw.get("reasoning") or "").strip(),
     )

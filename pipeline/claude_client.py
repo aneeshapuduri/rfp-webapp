@@ -48,7 +48,8 @@ class ClaudeClient:
                 ).strip()
             except Exception as e:  # noqa: BLE001 - surface after retries
                 last_err = e
-                time.sleep(2 * (attempt + 1))
+                if attempt < MAX_RETRIES - 1:  # no point sleeping after the final failure
+                    time.sleep(2 * (attempt + 1))
         raise RuntimeError(f"Claude API call failed after {MAX_RETRIES} attempts: {last_err}")
 
     def generate_json(self, system: str, user: str, max_tokens: int = 2000) -> list | dict:
@@ -86,7 +87,8 @@ class ClaudeClient:
                     return parse_llm_json(raw, "Claude (web search)")
                 except Exception as e:  # noqa: BLE001 - retried, then surfaced to the outer fallback
                     last_err = e
-                    time.sleep(2 * (attempt + 1))
+                    if attempt < MAX_RETRIES - 1:
+                        time.sleep(2 * (attempt + 1))
             raise RuntimeError(f"Claude web-search call failed after {MAX_RETRIES} attempts: {last_err}")
         except Exception:
             logger.warning(

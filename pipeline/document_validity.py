@@ -27,6 +27,14 @@ class DocumentValidityResult:
         }
 
 
+def _as_bool(value) -> bool:
+    """Models sometimes return "false"/"no" as a string; bool("false") is True, which would let
+    a rejected document through."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1", "y")
+    return bool(value)
+
+
 def classify_document_validity(rfp_text: str, client: ClaudeClient) -> DocumentValidityResult:
     system_prompt, user_prompt = build_validity_prompt(rfp_text)
     raw = client.generate_json(system_prompt, user_prompt, max_tokens=300)
@@ -37,7 +45,7 @@ def classify_document_validity(rfp_text: str, client: ClaudeClient) -> DocumentV
         )
 
     return DocumentValidityResult(
-        is_bid_document=bool(raw.get("is_bid_document", False)),
-        confidence=raw.get("confidence", "low"),
-        reasoning=raw.get("reasoning", "").strip(),
+        is_bid_document=_as_bool(raw.get("is_bid_document", False)),
+        confidence=str(raw.get("confidence") or "low"),
+        reasoning=str(raw.get("reasoning") or "").strip(),
     )

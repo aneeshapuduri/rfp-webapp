@@ -61,6 +61,8 @@ def resolve_with_responses(
             )
             resolution = client.generate_json(sys_p, user_p, max_tokens=500)
 
+        if not isinstance(resolution, dict):
+            resolution = {}  # malformed model output: treat as "not resolved" rather than crash
         if resolution.get("resolved"):
             item.status = "clear"
             item.requirement = resolution.get("updated_requirement") or item.requirement

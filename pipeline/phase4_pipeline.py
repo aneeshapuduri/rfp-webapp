@@ -51,6 +51,19 @@ class ComplianceMatrixIncompleteError(Exception):
     pass
 
 
+def _matrix_requirements(result: Phase1Result):
+    """Requirements the compliance matrix must cover: everything finalized (clear /
+    assumption_needed) PLUS ambiguous requirements that were escalated for manual review. The
+    pipeline deliberately proceeds past escalated items (see Phase1Result.get_blocking), so they
+    DO exist by Phase 4 — leaving them out silently dropped open requirements from the bid's
+    compliance matrix."""
+    return [
+        r for r in result.requirements
+        if r.status in ("clear", "assumption_needed")
+        or (r.status == "ambiguous" and r.escalated_for_manual_review)
+    ]
+
+
 def _validate_extra_sections(raw) -> list[dict]:
     """The extra-sections prompt asks for a JSON array of {title, content} objects, but nothing
     downstream can trust an LLM's JSON shape blindly the way build_compliance_matrix insists on
@@ -83,7 +96,7 @@ def build_compliance_matrix(
     (status in clear/assumption_needed — ambiguous items shouldn't exist by Phase 4, since
     the gate would have halted the pipeline before this runs).
     """
-    finalized = [r for r in result.requirements if r.status in ("clear", "assumption_needed")]
+    finalized = _matrix_requirements(result)
     required_ids = {r.id for r in finalized}
 
     if demo_matrix is not None:
@@ -94,6 +107,15 @@ def build_compliance_matrix(
         req_dicts = [{"id": r.id, "requirement": r.requirement} for r in finalized]
         sys_p, user_p = compliance_matrix_prompt(req_dicts, company["core_capabilities"])
         raw_matrix = client.generate_json(sys_p, user_p, max_tokens=3000)
+
+    if not isinstance(raw_matrix, list) or not all(
+        isinstance(item, dict) and "requirement_id" in item and "response" in item and "status" in item
+        for item in raw_matrix
+    ):
+        raise ComplianceMatrixIncompleteError(
+            "The compliance matrix came back in an unexpected shape (each row needs "
+            "requirement_id, response and status) — please retry."
+        )
 
     returned_ids = {item["requirement_id"] for item in raw_matrix}
     missing = required_ids - returned_ids
@@ -197,6 +219,8 @@ def run_phase4(
 
     # Compliance matrix completeness is enforced even in demo mode, using the same code path.
     if "compliance_matrix" in (demo_narrative or {}):
+        # Canned demo data only ever covers the finalized requirements of its bundled RFP, so
+        # the demo check keeps the original (narrower) definition of "required".
         required_ids = {r.id for r in result.requirements if r.status in ("clear", "assumption_needed")}
         returned_ids = {item["requirement_id"] for item in sections["compliance_matrix"]}
         missing = required_ids - returned_ids
