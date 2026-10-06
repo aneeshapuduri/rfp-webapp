@@ -180,7 +180,7 @@
             </colgroup>
             <tbody>
                 {% for p in recent_projects %}
-                <tr class="clickable-row" data-project-id="{{ p.id }}" data-status="{{ p.status }}">
+                <tr class="clickable-row" data-project-id="{{ p.id }}" data-status="{{ p.status }}" data-has-error="{{ 1 if p.error_message else 0 }}">
                     <td class="cell-truncate"><a href="/projects/{{ p.id }}" title="{{ p.name }}">{{ p.name }}</a></td>
                     <td>
                         <span class="status-pill status-pill--wrap status-{{ p.status | replace(' ', '-') | lower }}">

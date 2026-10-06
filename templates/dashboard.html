@@ -75,7 +75,7 @@
         </thead>
         <tbody>
             {% for p in projects %}
-            <tr class="clickable-row" data-project-id="{{ p.id }}" data-status="{{ p.status }}" data-category="{{ p.category or '__none__' }}" data-price="{{ p.total_price or 0 }}">
+            <tr class="clickable-row" data-project-id="{{ p.id }}" data-status="{{ p.status }}" data-has-error="{{ 1 if p.error_message else 0 }}" data-category="{{ p.category or '__none__' }}" data-price="{{ p.total_price or 0 }}">
                 <td class="cell-truncate"><a href="/projects/{{ p.id }}" title="{{ p.name }}">{{ p.name }}</a></td>
                 <td>{% if p.category %}<span class="cap-chip">{{ p.category }}</span>{% else %}<span class="cell-muted">—</span>{% endif %}</td>
                 <td>

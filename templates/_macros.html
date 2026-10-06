@@ -41,11 +41,13 @@
     var ACTIVE_STATUSES = ["Analyzing", "Responses Pending"];
     var rows = document.querySelectorAll({{ row_selector | tojson }});
     var tracked = {};
+    var erred = {};
     rows.forEach(function (row) {
         var status = row.getAttribute("data-status");
         var id = row.getAttribute("data-project-id");
         if (id && ACTIVE_STATUSES.indexOf(status) !== -1) {
             tracked[id] = status;
+            erred[id] = row.getAttribute("data-has-error") === "1";
         }
     });
     var ids = Object.keys(tracked);
@@ -56,7 +58,7 @@
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (data) {
                 if (!data) return;
-                var changed = data.some(function (p) { return p.status !== tracked[p.id] || p.has_error; });
+                var changed = data.some(function (p) { return p.status !== tracked[p.id] || (p.has_error && !erred[p.id]); });
                 if (changed) {
                     clearInterval(timer);
                     location.reload();

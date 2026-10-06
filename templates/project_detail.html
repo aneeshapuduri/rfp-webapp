@@ -273,7 +273,7 @@
 {% if project.error_message %}
 <div class="alert alert-error" role="alert" style="margin-top:20px;">
     <div><strong>Something went wrong during processing:</strong><pre>{{ project.error_message }}</pre></div>
-    {% if project.status == "Analyzing" %}
+    {% if project.status == "Analyzing" or (project.status == "Pending Intake Review" and project.go_no_go_decision == "Go") %}
     <div style="margin-top:12px;">
         <form action="/projects/{{ project.id }}/retry" method="post" style="display:inline;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -284,6 +284,21 @@
             rate limit) rather than a problem with your document — retrying re-runs analysis
             on the same uploaded file, no re-upload needed.
         </span>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if stalled and not project.error_message %}
+<div class="alert alert-error" role="alert" style="margin-top:20px;">
+    <div><strong>This project hasn't progressed in a while.</strong>
+    Processing may have been interrupted (for example by a server restart).</div>
+    {% if project.status == "Analyzing" or (project.status == "Pending Intake Review" and project.go_no_go_decision == "Go") %}
+    <div style="margin-top:12px;">
+        <form action="/projects/{{ project.id }}/retry" method="post" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-primary">Retry Processing</button>
+        </form>
     </div>
     {% endif %}
 </div>
@@ -1119,12 +1134,13 @@
     // decision being specifically "Go": harmless either way, since "No-Go" already leaves this
     // status in the same request and would just poll a status that's never going to change.
     var initialStatus = "{{ project.status }}";
+    var initialHasError = {{ 'true' if project.error_message else 'false' }};
     var pollUrl = "/projects/{{ project.id }}/status";
     var timer = setInterval(function () {
         fetch(pollUrl, { credentials: "same-origin" })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (data) {
-                if (data && (data.status !== initialStatus || data.has_error)) {
+                if (data && (data.status !== initialStatus || (data.has_error && !initialHasError))) {
                     clearInterval(timer);
                     location.reload();
                 }

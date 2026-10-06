@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ status_code }} — RFP Proposal Agent{% endblock %}
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>{% if status_code == 404 %}Page not found{% elif status_code == 403 %}Not allowed{% elif status_code >= 500 %}Something went wrong{% else %}We couldn't do that{% endif %}</h1>
+    </div>
+</div>
+<div class="alert alert-error" role="alert">{{ message }}</div>
+<p><a class="btn-primary" href="/home">Back to Home</a></p>
+{% endblock %}
+{% block auth_content %}
+<div class="auth-form-wrap" style="max-width:480px;margin:12vh auto;padding:0 24px;">
+    <h1>{% if status_code == 404 %}Page not found{% else %}We couldn't do that{% endif %}</h1>
+    <div class="alert alert-error" role="alert">{{ message }}</div>
+    <p><a class="btn-primary" href="/login">Go to sign in</a></p>
+</div>
+{% endblock %}
