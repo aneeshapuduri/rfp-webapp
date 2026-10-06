@@ -103,8 +103,11 @@ def _record_failure(project_id: str, stage: str, exc: Exception, status: str | N
     could view it — see the code review's 'internal error detail exposed to users' finding."""
     ref = db.new_id()[:8]
     logger.exception("[%s] pipeline failure during %s (ref=%s)", project_id, stage, ref)
+    # Keep only the first line, capped — some exceptions (e.g. malformed LLM output) embed the
+    # entire raw model response, which can be huge and echoes bid-document content onto the page.
+    detail = (str(exc).splitlines() or [""])[0][:400]
     user_message = (
-        f"Processing failed during {stage}: {exc}\n"
+        f"Processing failed during {stage}: {detail}\n"
         f"(ref: {ref} — full details are in the server log, not shown here for security reasons.)"
     )
     fields = {"error_message": user_message}
@@ -129,6 +132,13 @@ def _read_upload_via_temp_file(content: bytes, extension: str, reader):
             os.unlink(path)
         except OSError:
             pass
+
+
+def preflight_read_upload(content: bytes, extension: str) -> str:
+    """Opens the upload exactly as the pipeline will, so a corrupt / empty / password-protected /
+    scanned-image file is rejected on the upload form with a readable reason instead of creating
+    a project that then fails in the background. Raises ValueError with a user-safe message."""
+    return _read_upload_via_temp_file(content, extension, read_rfp)
 
 
 def check_document_validity(content: bytes, extension: str) -> DocumentValidityResult | None:
@@ -247,7 +257,7 @@ def resume_after_intake_approval(project_id: str):
             _run_phase3_and_4(project_id, result, client, demo_case="lakeview" if client is None else None)
 
     except Exception as e:  # noqa: BLE001
-        _record_failure(project_id, "phase1", e, status="Pending Intake Review")
+        _record_failure(project_id, "intake approval", e, status="Pending Intake Review")
 
 
 def _record_invalid_document(project_id: str, validity: DocumentValidityResult):
@@ -389,6 +399,7 @@ def _generate_clarification_doc(project_id: str, result: Phase1Result):
     db.update_project(
         project_id,
         status="Clarifications Sent",
+        error_message=None,
         clarification_mapping_json=json.dumps(mapping),
     )
     db.log_action("clarification_doc_generated", project_id, {"question_count": len(mapping)})
@@ -471,11 +482,11 @@ def _apply_client_responses(project_id: str, responses: dict[str, str]):
     else:
         result = resolve_with_responses(result, responses, client=client)
 
-    db.update_project(project_id, phase1_result_json=json.dumps(result.to_dict()))
+    db.update_project(project_id, phase1_result_json=json.dumps(result.to_dict()), error_message=None)
 
     if result.pipeline_decision == "halt_for_clarification":
         blocking = result.get_blocking()
-        db.update_project(project_id, status="Clarifications Sent")
+        db.update_project(project_id, status="Clarifications Sent", error_message=None)
         db.log_action("responses_insufficient", project_id, {"still_blocking": [r.id for r in blocking]})
     else:
         _run_phase3_and_4(project_id, result, client, demo_case="lakeview" if client is None else None)
@@ -549,12 +560,20 @@ def _run_phase3_and_4(project_id: str, result: Phase1Result, client: ClaudeClien
         {k: v for k, v in content.items() if k != "company"}
     ))
 
+    # The early intake gate and the later Summary-tab gate share the same go_no_go_* columns.
+    # Without this reset the intake "Go" leaked into the later gate: the project looked already
+    # approved at the final gate (never appearing in the admin approvals queue) and the final bid
+    # could be generated with no second admin decision. The intake decision stays in the audit log.
+    _fresh_gate = dict(
+        error_message=None, go_no_go_decision=None, go_no_go_decided_by=None,
+        go_no_go_decided_at=None, go_no_go_comment=None,
+    )
     assumption_items = [r for r in result.requirements if r.status == "assumption_needed"]
     if assumption_items:
-        db.update_project(project_id, status="Awaiting Assumptions Approval")
+        db.update_project(project_id, status="Awaiting Assumptions Approval", **_fresh_gate)
         db.log_action("awaiting_assumptions_approval", project_id, {"count": len(assumption_items)})
     else:
-        db.update_project(project_id, status="Awaiting Preview")
+        db.update_project(project_id, status="Awaiting Preview", **_fresh_gate)
         db.log_action("awaiting_preview", project_id, {})
         # No assumptions gate to pass through here, so this is the first moment the project is
         # actually on the Summary tab — compute its fresh Go/No-Go suggestion now. (When there
@@ -627,6 +646,8 @@ def finalize_proposal(project_id: str, edited_content: dict, template_choice: st
         db.update_project(
             project_id,
             status="Ready to Generate",
+            error_message=None,
+            finalize_started_at=None,
             phase4_content_json=json.dumps(edited_content),
             template_choice=template_choice,
         )
@@ -636,6 +657,13 @@ def finalize_proposal(project_id: str, edited_content: dict, template_choice: st
         })
     except Exception as e:  # noqa: BLE001
         _record_failure(project_id, "finalize_proposal", e, status="Awaiting Preview")
+    finally:
+        # Always release the "build in progress" marker (a no-op after success, which already
+        # cleared it) so a failed build can be retried immediately instead of after the timeout.
+        try:
+            db.release_finalize(project_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("[%s] could not release finalize marker", project_id)
 
 
 def recompute_staffing_and_pricing(edited_staffing_plan: list[dict]) -> dict:

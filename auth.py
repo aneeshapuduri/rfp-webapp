@@ -20,6 +20,9 @@ import hashlib
 import hmac
 import os
 import secrets
+import threading
+import time
+from urllib.parse import quote
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -48,6 +51,70 @@ def verify_password(password: str, stored_hash: str) -> bool:
         return hmac.compare_digest(digest.hex(), hex_digest)
     except (ValueError, AttributeError):
         return False
+
+
+def safe_next_path(candidate: str | None, default: str = "/home") -> str:
+    """Validates a post-login redirect target. Only a plain same-site absolute path is allowed:
+    it must start with exactly one "/" — "//host/path" and "/\\host" are protocol-relative URLs
+    that browsers treat as an off-site link, so a bare startswith("/") check (what login used to
+    do) let an attacker craft /login?next=//evil.example and bounce a freshly authenticated user
+    to their site. Control characters / backslashes anywhere in the value are rejected too."""
+    if not candidate or not candidate.startswith("/") or candidate.startswith("//"):
+        return default
+    if "\\" in candidate or any(ord(ch) < 32 for ch in candidate):
+        return default
+    return candidate
+
+
+# Dummy hash verified when the username doesn't exist, so a login attempt for an unknown
+# account takes the same ~PBKDF2 time as one for a real account (otherwise response time alone
+# reveals which usernames exist).
+_DUMMY_HASH = None
+
+
+def burn_password_check(password: str):
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = hash_password("not-a-real-password")
+    verify_password(password, _DUMMY_HASH)
+
+
+# Minimal in-process brute-force throttle for the login form: after MAX_FAILURES failed attempts
+# for the same username (or the same client IP) inside WINDOW_SECONDS, further attempts are
+# refused until the window passes. In-memory by design (single-process app, no extra
+# dependency) — it resets on restart, which is acceptable for a speed bump against guessing.
+_LOGIN_WINDOW_SECONDS = 300
+_LOGIN_MAX_FAILURES = 8
+_failures: dict[str, list[float]] = {}
+_failures_lock = threading.Lock()
+
+
+def _prune(key: str, now: float) -> list[float]:
+    recent = [t for t in _failures.get(key, []) if now - t < _LOGIN_WINDOW_SECONDS]
+    if recent:
+        _failures[key] = recent
+    else:
+        _failures.pop(key, None)
+    return recent
+
+
+def login_throttled(username: str, client_ip: str) -> bool:
+    now = time.time()
+    with _failures_lock:
+        return (len(_prune(f"u:{username.strip().lower()}", now)) >= _LOGIN_MAX_FAILURES
+                or len(_prune(f"ip:{client_ip}", now)) >= _LOGIN_MAX_FAILURES * 3)
+
+
+def record_login_failure(username: str, client_ip: str):
+    now = time.time()
+    with _failures_lock:
+        _failures.setdefault(f"u:{username.strip().lower()}", []).append(now)
+        _failures.setdefault(f"ip:{client_ip}", []).append(now)
+
+
+def clear_login_failures(username: str):
+    with _failures_lock:
+        _failures.pop(f"u:{username.strip().lower()}", None)
 
 
 def get_session_secret() -> str:
@@ -82,7 +149,10 @@ class AuthGateMiddleware(BaseHTTPMiddleware):
         if not user or not user["is_active"]:
             request.session.clear()
             if request.method == "GET":
-                return RedirectResponse(f"/login?next={path}", status_code=303)
+                # Keep the query string too (e.g. /audit?tab=system) and URL-encode the whole
+                # target so characters like "&" or "#" can't corrupt the login URL.
+                target = path + (f"?{request.url.query}" if request.url.query else "")
+                return RedirectResponse(f"/login?next={quote(target, safe='')}", status_code=303)
             return RedirectResponse("/login", status_code=303)
 
         request.session.setdefault("csrf_token", secrets.token_hex(32))

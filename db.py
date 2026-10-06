@@ -193,6 +193,7 @@ _MIGRATIONS = [
     # deliberately separate from (and later than) capability_fit_json, which is a cheap
     # deterministic keyword check run right after upload, before most of this exists yet.
     ("projects", "go_no_go_suggestion_json", "TEXT"),
+    ("projects", "finalize_started_at", "TEXT"),
     # Tracks whether the preparer has explicitly acknowledged an admin's "Needs Confirmation"
     # comment before being allowed to resume editing the proposal — see main.py's
     # acknowledge_revision route. Null while status is "Needs Revision" and unacknowledged (the
@@ -231,13 +232,25 @@ class _Conn:
 
     def __init__(self, raw):
         self._raw = raw
+        self._released = False
 
     def execute(self, sql: str, params=()):
         cur = self._raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         # Every query in this module was written with sqlite's "?" placeholder style; none of
         # them contain a literal "?" character anywhere else, so this blanket swap to
         # psycopg2's "%s" style is safe and avoids rewriting every call site individually.
-        cur.execute(sql.replace("?", "%s"), params)
+        try:
+            cur.execute(sql.replace("?", "%s"), params)
+        except Exception:
+            # Almost every function below calls conn.close() only on the success path (no
+            # try/finally), so a failed query (e.g. a unique-constraint violation from two
+            # simultaneous "create user"/"create category" requests) used to leave this
+            # connection checked out of the pool forever — after 10 such errors the pool was
+            # exhausted and the whole app hung. Roll back and hand the connection back here so
+            # an error in one query can never leak it.
+            self.rollback()
+            self.close()
+            raise
         return cur
 
     def executescript(self, script: str):
@@ -249,11 +262,20 @@ class _Conn:
         self._raw.commit()
 
     def rollback(self):
-        self._raw.rollback()
+        if self._released:
+            return
+        try:
+            self._raw.rollback()
+        except Exception:
+            pass
 
     def close(self):
         """Returns the connection to the pool rather than closing the socket — matches the
-        call sites below, which all call conn.close() once they're done with a request."""
+        call sites below, which all call conn.close() once they're done with a request.
+        Idempotent: safe to call again after execute() already released it on an error."""
+        if self._released:
+            return
+        self._released = True
         try:
             _get_pool().putconn(self._raw)
         except Exception:
@@ -270,7 +292,8 @@ def _apply_migrations(conn: _Conn):
         cols = {
             row["column_name"]
             for row in conn.execute(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = ? AND table_schema = current_schema()",
                 (table,),
             ).fetchall()
         }
@@ -280,7 +303,7 @@ def _apply_migrations(conn: _Conn):
 
 def _table_exists(conn: _Conn, table: str) -> bool:
     row = conn.execute(
-        "SELECT to_regclass(?) AS reg", (table,)
+        "SELECT to_regclass(current_schema() || '.' || ?) AS reg", (table,)
     ).fetchone()
     return row["reg"] is not None
 
@@ -387,6 +410,50 @@ def update_project(project_id: str, **fields):
     conn.close()
 
 
+def claim_project(project_id: str, expected_status: str, require_null: tuple[str, ...] = (), **fields) -> bool:
+    """Atomic compare-and-set: applies `fields` only if the project is still at
+    `expected_status` (and every column named in `require_null` is still NULL), and reports
+    whether this call was the one that won. Used by the admin decision routes so two
+    simultaneous clicks (a double-click, or two admins) can't both pass a status check made
+    moments earlier and each kick off the same background pipeline step — that used to
+    generate duplicate clarification documents and double the LLM spend."""
+    fields["updated_at"] = now()
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    where_null = "".join(f" AND {c} IS NULL" for c in require_null)
+    conn = get_conn()
+    cur = conn.execute(
+        f"UPDATE projects SET {set_clause} WHERE id = ? AND status = ?{where_null}",
+        list(fields.values()) + [project_id, expected_status],
+    )
+    won = cur.rowcount == 1
+    conn.commit()
+    conn.close()
+    return won
+
+
+def claim_finalize(project_id: str, stale_minutes: int = 10) -> bool:
+    """Atomically marks the final-proposal build as started. Returns False if another build is
+    already in flight (started less than `stale_minutes` ago), so a double-click on "Generate
+    Final Bid" can't spawn two concurrent builds that each upload a document and race on status.
+    A marker older than `stale_minutes` is treated as a crashed build and may be re-claimed."""
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)).isoformat()
+    conn = get_conn()
+    cur = conn.execute(
+        "UPDATE projects SET finalize_started_at = ?, updated_at = ? WHERE id = ? "
+        "AND (finalize_started_at IS NULL OR finalize_started_at < ?)",
+        (now(), now(), project_id, cutoff),
+    )
+    won = cur.rowcount == 1
+    conn.commit()
+    conn.close()
+    return won
+
+
+def release_finalize(project_id: str):
+    update_project(project_id, finalize_started_at=None)
+
+
 def soft_delete_project(project_id: str):
     update_project(project_id, deleted_at=now())
 
@@ -445,8 +512,13 @@ def get_category(category_id: str) -> dict | None:
 
 
 def get_category_by_name(name: str) -> dict | None:
+    """Exact match first (the dropdown on the New Project form always submits an exact stored
+    name), then a case-insensitive match — so "web development" can't be created as a
+    near-duplicate of an existing "Web Development"."""
     conn = get_conn()
     row = conn.execute("SELECT * FROM categories WHERE name = ?", (name,)).fetchone()
+    if not row:
+        row = conn.execute("SELECT * FROM categories WHERE lower(name) = lower(?)", (name,)).fetchone()
     conn.close()
     return dict(row) if row else None
 
@@ -694,14 +766,28 @@ def set_user_active(user_id: str, is_active: bool):
 
 
 def delete_user(user_id: str):
-    """Permanently removes a user account. Safe to hard-delete (rather than soft-delete like
+    """Permanently removes a user account (and its explicit project grants). Safe to hard-delete (rather than soft-delete like
     projects) because nothing else references users.id as a foreign key — projects.created_by
     and audit_log.user_identity both store the username as a plain string at the time of the
     action, so history stays readable even after the account is gone."""
     conn = get_conn()
+    conn.execute("DELETE FROM project_access WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.commit()
     conn.close()
+
+
+def username_owns_projects(username: str) -> bool:
+    """True if any project (deleted or not) was created by this username. Used to stop an admin
+    re-creating a previously deleted account's username: projects.created_by is a plain string,
+    so a brand-new account with the same name would silently inherit every project the old
+    account owned."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT 1 AS x FROM projects WHERE created_by = ? LIMIT 1", (username.strip().lower(),)
+    ).fetchone()
+    conn.close()
+    return row is not None
 
 
 def count_active_admins() -> int:

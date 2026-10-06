@@ -61,8 +61,10 @@ themselves — enforced via _get_project_or_403() on every route that touches a 
 """
 from __future__ import annotations
 
+import datetime
 import json
 import logging
+import math
 import os
 import pathlib
 import re
@@ -70,9 +72,11 @@ import secrets
 from urllib.parse import urlparse
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 import auth
@@ -82,6 +86,7 @@ from pipeline_runner import (
     DEMO_MODE,
     build_preview_document_bytes,
     check_document_validity,
+    preflight_read_upload,
     compute_go_no_go_suggestion_for_project,
     extract_client_responses,
     finalize_proposal,
@@ -123,6 +128,142 @@ _SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower(
 app.add_middleware(auth.AuthGateMiddleware)
 app.add_middleware(SessionMiddleware, secret_key=auth.get_session_secret(), same_site="lax",
                     https_only=_SESSION_COOKIE_SECURE)
+
+
+def _wants_html(request: Request) -> bool:
+    """Browsers get a friendly HTML error page; fetch()/XHR polls (Accept: application/json or
+    */* with no text/html) keep the JSON body they always had."""
+    return "text/html" in request.headers.get("accept", "")
+
+
+def _error_page(request: Request, status_code: int, message: str):
+    # Built defensively: this runs while handling an error, so it must never raise itself (the
+    # session or DB may be exactly what's broken).
+    try:
+        ctx = _ctx(request, status_code=status_code, message=message)
+    except Exception:  # noqa: BLE001
+        ctx = {"current_user": None, "csrf_token": "", "demo_mode": False,
+               "pending_approvals_count": 0, "back_url": None, "back_label": None,
+               "status_code": status_code, "message": message}
+    return templates.TemplateResponse(request, "error.html", ctx, status_code=status_code)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    if _wants_html(request):
+        return _error_page(request, exc.status_code, str(exc.detail))
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(request: Request, exc: RequestValidationError):
+    if _wants_html(request):
+        return _error_page(request, 422, "Some required information was missing or invalid. "
+                                         "Go back, check the form, and try again.")
+    return JSONResponse({"detail": "Invalid request."}, status_code=422)
+
+
+@app.exception_handler(storage.UploadTooLarge)
+async def _too_large_handler(request: Request, exc: storage.UploadTooLarge):
+    if _wants_html(request):
+        return _error_page(request, 413, str(exc))
+    return JSONResponse({"detail": str(exc)}, status_code=413)
+
+
+@app.exception_handler(storage.UnsupportedFileType)
+async def _unsupported_type_handler(request: Request, exc: storage.UnsupportedFileType):
+    if _wants_html(request):
+        return _error_page(request, 400, str(exc))
+    return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    logging.getLogger("rfp_agent").exception("Unhandled error on %s %s", request.method, request.url.path)
+    if _wants_html(request):
+        try:
+            return _error_page(request, 500, "Something went wrong on our side. Please try again; "
+                                             "if it keeps happening, tell an admin.")
+        except Exception:  # noqa: BLE001
+            return HTMLResponse("<h1>Something went wrong</h1><p>Please go back and try again.</p>",
+                                status_code=500)
+    return JSONResponse({"detail": "Internal server error."}, status_code=500)
+
+
+@app.get("/health")
+def health():
+    """Unauthenticated liveness probe for the host (see AuthGateMiddleware's public paths)."""
+    return {"status": "ok"}
+
+
+# ---------- Input validation helpers ----------
+MAX_PROJECT_NAME_LEN = 200
+MAX_CATEGORY_LEN = 80
+MAX_PASSWORD_LEN = 256
+MAX_COMMENT_LEN = 5000
+MAX_STATUS_POLL_IDS = 100
+MAX_FORM_ROWS = 500
+_USERNAME_RE = re.compile(r"^[a-z0-9._-]{3,64}$")
+STALL_MINUTES = 10
+
+
+def _to_int(value, default: int = 0, *, field: str = "value", minimum: int | None = None,
+            maximum: int | None = None, strict: bool = False) -> int:
+    """Parses a form field to int without 500-ing on junk. Accepts "3", " 3 ", and "2.0".
+    strict=True raises a clean 400 on anything unparseable/negative/inf/nan instead of falling
+    back to `default`."""
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        f = float(str(value).strip())
+        if math.isnan(f) or math.isinf(f):
+            raise ValueError
+        n = int(f)
+    except (ValueError, OverflowError):
+        if strict:
+            raise HTTPException(400, f"{field} must be a whole number.")
+        return default
+    if minimum is not None and n < minimum:
+        if strict:
+            raise HTTPException(400, f"{field} must be at least {minimum}.")
+        return minimum
+    if maximum is not None and n > maximum:
+        if strict:
+            raise HTTPException(400, f"{field} must be at most {maximum}.")
+        return maximum
+    return n
+
+
+def _to_float(value, *, field: str = "value", minimum: float = 0.0, maximum: float = 1_000_000.0):
+    """Parses a decimal form field; returns None for blank, raises a clean 400 for junk,
+    negative, nan or inf (these used to flow straight into the pricing engine)."""
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        f = float(str(value).strip().replace(",", ""))
+    except ValueError:
+        raise HTTPException(400, f"{field} must be a number.")
+    if math.isnan(f) or math.isinf(f):
+        raise HTTPException(400, f"{field} must be a finite number.")
+    if f < minimum or f > maximum:
+        raise HTTPException(400, f"{field} must be between {minimum:g} and {maximum:g}.")
+    return f
+
+
+def _is_stalled(project: dict, minutes: int = STALL_MINUTES) -> bool:
+    """True if a project sitting in an in-flight background status hasn't been touched for
+    `minutes` — the server restarted (or the worker died) mid-pipeline, and since background
+    tasks are in-process there is nothing left that will ever advance it."""
+    ts = project.get("updated_at")
+    if not ts:
+        return False
+    try:
+        dt = datetime.datetime.fromisoformat(str(ts))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return False
+    return (datetime.datetime.now(datetime.timezone.utc) - dt) > datetime.timedelta(minutes=minutes)
 
 
 @app.on_event("startup")
@@ -385,28 +526,45 @@ def login_form(request: Request, next: str = "/home"):
         return RedirectResponse("/home", status_code=303)
     request.session.setdefault("csrf_token", secrets.token_hex(32))
     return templates.TemplateResponse(request, "login.html", {
-        "csrf_token": request.session["csrf_token"], "next": next, "error": None,
+        "csrf_token": request.session["csrf_token"], "next": auth.safe_next_path(next), "error": None,
     })
 
 
 @app.post("/login")
 async def login_submit(request: Request):
     form = await request.form()
-    username = str(form.get("username", ""))
-    password = str(form.get("password", ""))
-    next_path = str(form.get("next") or "/home")
-    if not next_path.startswith("/"):
-        next_path = "/home"  # never redirect off-site
+    username = str(form.get("username", "")).strip()[:128]
+    password = str(form.get("password", ""))[:MAX_PASSWORD_LEN]
+    next_path = auth.safe_next_path(str(form.get("next") or "/home"))
+    client_ip = request.client.host if request.client else "unknown"
 
-    user = db.get_user_by_username(username)
-    if not user or not user["is_active"] or not auth.verify_password(password, user["password_hash"]):
-        db.log_action("login_failed", detail={"username": username}, user_identity=username or "unknown")
+    def _fail(message: str, status_code: int = 401):
         request.session.setdefault("csrf_token", secrets.token_hex(32))
         return templates.TemplateResponse(request, "login.html", {
-            "csrf_token": request.session["csrf_token"], "next": next_path,
-            "error": "Incorrect username or password.",
-        }, status_code=401)
+            "csrf_token": request.session["csrf_token"], "next": next_path, "error": message,
+        }, status_code=status_code)
 
+    # CSRF on login too (login CSRF lets an attacker sign a victim into the attacker's account).
+    session_token = request.session.get("csrf_token")
+    if not session_token or not secrets.compare_digest(str(form.get("csrf_token", "")), str(session_token)):
+        return _fail("Your session expired. Please try signing in again.", 403)
+
+    if auth.login_throttled(username, client_ip):
+        db.log_action("login_throttled", detail={"username": username}, user_identity=username or "unknown")
+        return _fail("Too many failed sign-in attempts. Please wait a few minutes and try again.", 429)
+
+    user = db.get_user_by_username(username)
+    if user and user["is_active"]:
+        ok = auth.verify_password(password, user["password_hash"])
+    else:
+        auth.burn_password_check(password)  # equalize timing so usernames can't be enumerated
+        ok = False
+    if not ok:
+        auth.record_login_failure(username, client_ip)
+        db.log_action("login_failed", detail={"username": username}, user_identity=username or "unknown")
+        return _fail("Incorrect username or password.")
+
+    auth.clear_login_failures(username)
     request.session.clear()
     request.session["user_id"] = user["id"]
     db.log_action("login_succeeded", user_identity=user["username"])
@@ -596,11 +754,12 @@ async def create_project(
     background_tasks: BackgroundTasks,
     project_name: str = Form(...),
     category: str = Form(""),
-    bid_file: UploadFile = File(...),
+    bid_file: UploadFile | None = File(None),
     _: None = Depends(auth.verify_csrf),
 ):
     user = auth.current_user(request)
     categories = db.list_categories()
+    project_name = project_name or ""
 
     def _rerender(error: str, status_code: int = 400):
         return templates.TemplateResponse(
@@ -611,21 +770,27 @@ async def create_project(
 
     if not project_name.strip():
         return _rerender("Project name is required.")
+    if len(project_name.strip()) > MAX_PROJECT_NAME_LEN:
+        return _rerender(f"Project name must be {MAX_PROJECT_NAME_LEN} characters or fewer.")
+    if len(category) > MAX_CATEGORY_LEN:
+        return _rerender("Choose a category from the list.")
     if not categories:
         return _rerender("No categories are configured yet — ask an admin to add one under "
                           "Admin · Categories before creating a project.")
     if not category or not db.get_category_by_name(category):
         return _rerender("Choose a category from the list.")
 
+    if bid_file is None or not getattr(bid_file, "filename", None):
+        return _rerender("Please choose a bid document to upload.")
     try:
         content = await _read_capped(bid_file, storage.MAX_UPLOAD_BYTES)
         if not content:
-            raise HTTPException(400, "Uploaded file is empty.")
+            return _rerender("The uploaded file is empty.")
         extension = storage.validate_extension(bid_file.filename, storage.ALLOWED_UPLOAD_EXTENSIONS)
     except storage.UnsupportedFileType as e:
-        raise HTTPException(400, str(e)) from e
+        return _rerender(str(e))
     except storage.UploadTooLarge as e:
-        raise HTTPException(413, str(e)) from e
+        return _rerender(str(e), 413)
 
     # Bid-document validity check now runs synchronously, right here, before any project row is
     # created. This replaces the old flow where the check only happened inside the background
@@ -634,6 +799,14 @@ async def create_project(
     # dashboard, and the uploader only found out about the rejection by revisiting or refreshing
     # that page. Now the uploader gets an immediate answer on this same page, and nothing is
     # created or stored at all for a rejected file.
+    try:
+        preflight_read_upload(content, extension)
+    except ValueError as e:
+        return _rerender(str(e))
+    except Exception:  # noqa: BLE001
+        logging.getLogger("rfp_agent").exception("Upload preflight failed unexpectedly")
+        return _rerender("This file couldn't be read. Please check it opens normally and try again.")
+
     validity_already_checked = False
     try:
         validity = check_document_validity(content, extension)
@@ -751,7 +924,10 @@ def project_detail(request: Request, project_id: str):
         escalated_clarification_items=escalated_clarification_items,
         pending_responses=pending_responses,
         no_answers_found=request.query_params.get("no_answers_found") == "1",
-        generating=request.query_params.get("generating") == "1",
+        generating=bool(project.get("finalize_started_at")) and not _is_stalled(
+            {"updated_at": project.get("finalize_started_at")}) or request.query_params.get("generating") == "1",
+        stalled=project["status"] in ("Analyzing", "Responses Pending", "Pending Intake Review")
+                and _is_stalled(project),
         capability_fit=capability_fit,
         compliance_matrix=compliance_matrix,
         pricing=pricing,
@@ -789,7 +965,7 @@ def bulk_project_status(request: Request, ids: str = ""):
     ids are silently skipped rather than erroring the whole batch, since one stale id (e.g. a
     project someone else deleted mid-poll) shouldn't break polling for the rest of the list."""
     user = auth.current_user(request)
-    requested_ids = [i for i in ids.split(",") if i]
+    requested_ids = [i for i in ids.split(",") if i][:MAX_STATUS_POLL_IDS]
     results = []
     for pid in requested_ids:
         project = db.get_project(pid)
@@ -871,6 +1047,11 @@ async def submit_client_responses(
         raise HTTPException(400, "This project isn't waiting on clarification responses.")
     if not project.get("phase1_result_json"):
         raise HTTPException(400, "No extracted requirements found for this project.")
+    if (project["status"] == "Responses Pending" and not project.get("error_message")
+            and not _is_stalled(project)):
+        # Responses are already being processed in the background; a second submit (double
+        # click, second tab) would start a duplicate run and double-apply the answers.
+        raise HTTPException(409, "Your responses are already being processed — please wait a moment.")
 
     form = await request.form()
     result = Phase1Result.from_dict(json.loads(project["phase1_result_json"]))
@@ -889,7 +1070,8 @@ async def submit_client_responses(
         "responses_submitted", project_id, {"answered_count": len(responses)},
         user_identity=user["username"],
     )
-    db.update_project(project_id, status="Responses Pending", pending_client_responses_json=None)
+    db.update_project(project_id, status="Responses Pending", pending_client_responses_json=None,
+                      error_message=None)
     background_tasks.add_task(process_manual_responses, project_id, responses)
 
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
@@ -979,7 +1161,7 @@ async def record_go_no_go_decision(
     if decision not in ("Go", "No-Go", "Needs Confirmation"):
         raise HTTPException(400, "Invalid decision — must be 'Go', 'No-Go', or 'Needs Confirmation'.")
 
-    comment = str(form.get("comment", "")).strip() or None
+    comment = str(form.get("comment", "")).strip()[:MAX_COMMENT_LEN] or None
     if decision == "Needs Confirmation" and not comment:
         raise HTTPException(400, "A comment is required when choosing 'Needs Confirmation' — the "
                                   "preparer needs to know what to change.")
@@ -999,7 +1181,10 @@ async def record_go_no_go_decision(
         # editable proposal form reappears (see acknowledge_revision below).
         fields["revision_acknowledged_by"] = None
         fields["revision_acknowledged_at"] = None
-    db.update_project(project_id, **fields)
+    if project.get("go_no_go_decision"):
+        raise HTTPException(400, "A decision has already been recorded for this project.")
+    if not db.claim_project(project_id, "Awaiting Preview", require_null=("go_no_go_decision",), **fields):
+        raise HTTPException(400, "This project's status changed while you were deciding — refresh and try again.")
     db.log_action("go_no_go_decided", project_id, {"decision": decision, "has_comment": bool(comment)},
                   user_identity=user["username"])
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
@@ -1035,7 +1220,9 @@ async def record_intake_decision(
     if decision not in ("Go", "No-Go"):
         raise HTTPException(400, "Invalid decision — must be 'Go' or 'No-Go'.")
 
-    comment = str(form.get("comment", "")).strip() or None
+    comment = str(form.get("comment", "")).strip()[:MAX_COMMENT_LEN] or None
+    if project.get("go_no_go_decision"):
+        raise HTTPException(400, "An intake decision has already been recorded for this project.")
     fields = {
         "go_no_go_decision": decision,
         "go_no_go_decided_by": user["username"],
@@ -1044,7 +1231,8 @@ async def record_intake_decision(
     }
     if decision == "No-Go":
         fields["status"] = "Intake Rejected"
-        db.update_project(project_id, **fields)
+        if not db.claim_project(project_id, "Pending Intake Review", require_null=("go_no_go_decision",), **fields):
+            raise HTTPException(400, "This project's intake decision was already recorded.")
         db.log_action("intake_rejected", project_id, {"has_comment": bool(comment)}, user_identity=user["username"])
     else:
         # Status doesn't change to anything terminal here — resume_after_intake_approval (a
@@ -1052,7 +1240,9 @@ async def record_intake_decision(
         # or straight into Phase 3/4, whichever result.pipeline_decision calls for. Clear the
         # decision fields afterward isn't needed: unlike the later gate, this project never comes
         # back to THIS status again, so there's nothing to reset for a "fresh" intake decision.
-        db.update_project(project_id, **fields)
+        fields["error_message"] = None
+        if not db.claim_project(project_id, "Pending Intake Review", require_null=("go_no_go_decision",), **fields):
+            raise HTTPException(400, "This project's intake decision was already recorded.")
         db.log_action("intake_approved", project_id, {"has_comment": bool(comment)}, user_identity=user["username"])
         background_tasks.add_task(resume_after_intake_approval, project_id)
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
@@ -1088,6 +1278,13 @@ async def record_capability_override(
     if not requirement_id:
         raise HTTPException(400, "Missing requirement_id.")
     mark_available = form.get("mark_available") == "on"
+    _fit = json.loads(project["capability_fit_json"])
+    _known_ids = {str(x.get("requirement_id") or x.get("id")) for x in (_fit.get("per_requirement") or [])
+                  if isinstance(x, dict)}
+    _known_ids |= {str(x.get("requirement_id") or x.get("id")) for x in (_fit.get("gaps") or [])
+                   if isinstance(x, dict)}
+    if requirement_id not in _known_ids:
+        raise HTTPException(400, "That requirement isn't part of this project's capability assessment.")
 
     overridden_ids = set(json.loads(project["capability_overrides_json"])) if project.get("capability_overrides_json") else set()
     if mark_available:
@@ -1182,7 +1379,17 @@ def retry_processing(request: Request, background_tasks: BackgroundTasks, projec
     uploaded document itself, so simply trying again is usually all that's needed."""
     user = auth.current_user(request)
     project = _get_project_or_403(project_id, user)
-    if project["status"] != "Analyzing" or not project.get("error_message"):
+    stalled = _is_stalled(project)
+    # Retrying the post-intake step: an admin already said Go but the resume task failed (or died
+    # with the server) — without this the project was stuck forever at "Admin Approval Pending".
+    if (project["status"] == "Pending Intake Review" and project.get("go_no_go_decision") == "Go"
+            and (project.get("error_message") or stalled)):
+        if not db.claim_project(project_id, "Pending Intake Review", error_message=None):
+            raise HTTPException(400, "This project is no longer waiting at intake.")
+        db.log_action("project_retry", project_id, {"stage": "intake_resume"}, user_identity=user["username"])
+        background_tasks.add_task(resume_after_intake_approval, project_id)
+        return RedirectResponse(f"/projects/{project_id}", status_code=303)
+    if project["status"] != "Analyzing" or not (project.get("error_message") or stalled):
         raise HTTPException(400, "This project doesn't have a processing error to retry.")
 
     bid_docs = [d for d in db.list_documents(project_id) if d["doc_type"] == "bid_invitation"]
@@ -1215,15 +1422,15 @@ async def accept_assumptions(request: Request, project_id: str, _: None = Depend
         raise HTTPException(400, "This project isn't waiting on an assumptions decision.")
 
     form = await request.form()
-    row_count = int(form.get("assumption_row_count") or 0)
+    row_count = _to_int(form.get("assumption_row_count"), 0, minimum=0, maximum=MAX_FORM_ROWS)
     edited_text: dict[str, str] = {}
     for i in range(row_count):
         req_id = form.get(f"assumption_id_{i}")
         text = form.get(f"assumption_text_{i}")
         if req_id and text is not None:
-            edited_text[req_id] = text.strip()
+            edited_text[str(req_id)] = str(text).strip()
 
-    fields: dict = {"status": "Awaiting Preview"}
+    fields: dict = {"status": "Awaiting Preview", "error_message": None}
     edited_count = 0
     if edited_text and project.get("phase1_result_json"):
         result_dict = json.loads(project["phase1_result_json"])
@@ -1297,7 +1504,7 @@ def _reassemble_preview_content(project: dict, form) -> dict:
     # it here before generating. Recomputing via the same deterministic pricing engine used by
     # Phase 3 keeps total_hours/subtotal/labor_subtotal/contingency/total arithmetically
     # consistent no matter what the user changed.
-    staffing_row_count = int(form.get("staffing_row_count", 0) or 0)
+    staffing_row_count = _to_int(form.get("staffing_row_count"), 0, minimum=0, maximum=MAX_FORM_ROWS)
     if staffing_row_count:
         edited_staffing_plan = []
         for i in range(staffing_row_count):
@@ -1306,23 +1513,32 @@ def _reassemble_preview_content(project: dict, form) -> dict:
                 continue
             row = {
                 "role": str(role),
-                "headcount": int(form.get(f"staffing_headcount_{i}", 0) or 0),
-                "hours_per_person": int(form.get(f"staffing_hours_per_person_{i}", 0) or 0),
+                "headcount": _to_int(form.get(f"staffing_headcount_{i}"), 0, field=f"Headcount (row {i + 1})",
+                                     minimum=0, maximum=10_000, strict=True),
+                "hours_per_person": _to_int(form.get(f"staffing_hours_per_person_{i}"), 0,
+                                            field=f"Hours per person (row {i + 1})",
+                                            minimum=0, maximum=100_000, strict=True),
             }
-            rate_raw = form.get(f"staffing_rate_{i}")
-            if rate_raw not in (None, ""):
-                try:
-                    row["hourly_rate"] = float(rate_raw)
-                except ValueError:
-                    pass  # an unparseable rate just falls back to the rate card, not a 400
+            rate = _to_float(form.get(f"staffing_rate_{i}"), field=f"Hourly rate (row {i + 1})")
+            if rate is not None:
+                row["hourly_rate"] = rate  # blank falls back to the rate card
             edited_staffing_plan.append(row)
         if edited_staffing_plan:
-            pricing = recompute_staffing_and_pricing(edited_staffing_plan)
+            # The form doesn't carry each role's rationale text — keep what Phase 3 wrote rather
+            # than silently blanking it on every edit.
+            old_rationale = {l.get("role"): l.get("rationale", "") for l in (content.get("staffing") or [])
+                             if isinstance(l, dict)}
+            for row in edited_staffing_plan:
+                row.setdefault("rationale", old_rationale.get(row["role"], ""))
+            try:
+                pricing = recompute_staffing_and_pricing(edited_staffing_plan)
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
             content["pricing"] = pricing
             content["staffing"] = pricing["lines"]
 
     # Timeline: phase/duration/description are all free text, no arithmetic involved.
-    timeline_row_count = int(form.get("timeline_row_count", 0) or 0)
+    timeline_row_count = _to_int(form.get("timeline_row_count"), 0, minimum=0, maximum=MAX_FORM_ROWS)
     if timeline_row_count:
         edited_timeline = []
         for i in range(timeline_row_count):
@@ -1339,7 +1555,7 @@ def _reassemble_preview_content(project: dict, form) -> dict:
 
     # Compliance matrix: requirement_id/requirement stay tied to the actual extracted
     # requirements (read-only); only the response text and status are editable.
-    compliance_row_count = int(form.get("compliance_row_count", 0) or 0)
+    compliance_row_count = _to_int(form.get("compliance_row_count"), 0, minimum=0, maximum=MAX_FORM_ROWS)
     if compliance_row_count:
         existing_matrix = content.get("compliance_matrix", [])
         edited_matrix = []
@@ -1359,7 +1575,7 @@ def _reassemble_preview_content(project: dict, form) -> dict:
     # freely editable, and unchecking "include" for a row drops it from the final document
     # entirely rather than generating it empty — a detected item can be a false positive, and
     # this is the user's chance to say so before it ends up in a real proposal.
-    extra_section_row_count = int(form.get("extra_section_row_count", 0) or 0)
+    extra_section_row_count = _to_int(form.get("extra_section_row_count"), 0, minimum=0, maximum=MAX_FORM_ROWS)
     if extra_section_row_count:
         edited_extra_sections = []
         for i in range(extra_section_row_count):
@@ -1372,6 +1588,18 @@ def _reassemble_preview_content(project: dict, form) -> dict:
         content["extra_sections"] = edited_extra_sections
 
     return content
+
+
+def _ensure_docx(data: bytes, label: str):
+    """Rejects a corrupt / not-really-a-.docx upload up front (400) rather than failing later in
+    the background build, or storing a broken file as the final proposal."""
+    import io
+    import docx
+    try:
+        docx.Document(io.BytesIO(data))
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, f"The {label} couldn't be opened as a Word document — it may be "
+                                  "corrupt or not a real .docx file.") from None
 
 
 def _read_template_choice(form) -> str:
@@ -1425,6 +1653,7 @@ async def download_preview_document(
         except storage.UnsupportedFileType as e:
             raise HTTPException(400, str(e)) from e
         custom_template_bytes = await _read_capped(custom_template, storage.MAX_UPLOAD_BYTES)
+        _ensure_docx(custom_template_bytes, "template")
     elif template_choice == "rfp_structure":
         rfp_structure_sections = _read_rfp_structure_sections(project)
         if not rfp_structure_sections:
@@ -1488,6 +1717,7 @@ async def generate_final_proposal(
         except storage.UnsupportedFileType as e:
             raise HTTPException(400, str(e)) from e
         final_document_bytes = await _read_capped(final_document, storage.MAX_UPLOAD_BYTES)
+        _ensure_docx(final_document_bytes, "edited final document")
         display_name, stored_path, encrypted = storage.save_upload(
             project_id, final_document.filename, final_document_bytes
         )
@@ -1507,6 +1737,7 @@ async def generate_final_proposal(
         except storage.UnsupportedFileType as e:
             raise HTTPException(400, str(e)) from e
         custom_template_bytes = await _read_capped(custom_template, storage.MAX_UPLOAD_BYTES)
+        _ensure_docx(custom_template_bytes, "template")
         display_name, stored_path, encrypted = storage.save_upload(
             project_id, custom_template.filename, custom_template_bytes
         )
@@ -1516,7 +1747,9 @@ async def generate_final_proposal(
         if not rfp_structure_sections:
             raise HTTPException(400, "No RFP-specified response structure was detected for this project.")
 
-    db.update_project(project_id, template_choice=template_choice)
+    if not db.claim_finalize(project_id):
+        raise HTTPException(409, "The final proposal is already being generated — please wait a moment.")
+    db.update_project(project_id, template_choice=template_choice, error_message=None)
     db.log_action("preview_submitted", project_id, {
         "template_choice": template_choice,
         "used_uploaded_final_document": final_document_bytes is not None,
@@ -1561,6 +1794,7 @@ async def resubmit_preview(
     db.update_project(
         project_id,
         status="Awaiting Preview",
+        error_message=None,
         phase4_content_json=json.dumps(content),
         go_no_go_decision=None,
         go_no_go_decided_by=None,
@@ -1610,6 +1844,13 @@ def admin_users(request: Request):
     return templates.TemplateResponse(request, "admin_users.html", _admin_users_ctx(request))
 
 
+def _valid_project_ids(project_ids: list[str]) -> list[str]:
+    """Drops ids that don't refer to a live project (stale form, tampering) instead of letting a
+    bogus id hit the project_access foreign key and 500."""
+    wanted = {str(i) for i in project_ids}
+    return [p["id"] for p in db.list_projects() if p["id"] in wanted]
+
+
 @app.post("/admin/users")
 def admin_create_user(request: Request, username: str = Form(...), password: str = Form(...),
                        role: str = Form("member"), project_ids: list[str] = Form([]),
@@ -1621,10 +1862,19 @@ def admin_create_user(request: Request, username: str = Form(...), password: str
     error = None
     if not username or not password:
         error = "Username and password are required."
+    elif not _USERNAME_RE.match(username):
+        error = "Username must be 3-64 characters: lowercase letters, digits, dot, dash or underscore."
     elif len(password) < 8:
         error = "Password must be at least 8 characters."
+    elif len(password) > MAX_PASSWORD_LEN:
+        error = f"Password must be {MAX_PASSWORD_LEN} characters or fewer."
     elif db.get_user_by_username(username):
         error = f"A user named '{username}' already exists."
+    elif db.username_owns_projects(username):
+        error = (f"'{username}' was used by a previous account that created projects — choose a "
+                 "different username so those projects aren't handed to a new person.")
+    if not error and project_ids:
+        project_ids = _valid_project_ids(project_ids)
 
     if error:
         return templates.TemplateResponse(request, "admin_users.html",
@@ -1645,6 +1895,7 @@ def admin_update_user_access(request: Request, user_id: str, project_ids: list[s
     target = db.get_user(user_id)
     if not target:
         raise HTTPException(404, "User not found.")
+    project_ids = _valid_project_ids(project_ids)
     db.set_user_project_access(user_id, project_ids, granted_by=admin_user["username"])
     db.log_action("user_access_updated", detail={"target_username": target["username"], "project_ids": project_ids},
                   user_identity=admin_user["username"])
@@ -1765,6 +2016,8 @@ def admin_create_category(request: Request, name: str = Form(...), _: None = Dep
     error = None
     if not name:
         error = "Category name is required."
+    elif len(name) > MAX_CATEGORY_LEN:
+        error = f"Category name must be {MAX_CATEGORY_LEN} characters or fewer."
     elif db.get_category_by_name(name):
         error = f"A category named \"{name}\" already exists."
 
